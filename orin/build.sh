@@ -25,6 +25,9 @@ IMAGE_NAME="${IMAGE_NAME:-jetson-image}"
 PACKAGES=(
     cuda
     cudastack:standard
+    python
+    onnx
+    onnxruntime:1.27.1
 )
 
 # --- Environment pins ---------------------------------------------------------
