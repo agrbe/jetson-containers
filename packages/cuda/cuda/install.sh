@@ -46,3 +46,31 @@ apt-get clean
 dpkg --list | grep cuda
 dpkg -P ${CUDA_DEB}
 rm -rf /tmp/cuda
+
+# --- CCCL hotfix (NVIDIA/cccl #8842 + GCC 13.3) ------------------------------
+# CUDA 13.2 bundles CCCL headers declaring specializations of
+# cuda::proclaims_copyable_arguments with qualified names that GCC 13.3
+# rejects (both the original '::cuda::' and the upstream-fixed 'cuda::').
+# Rewrite to the namespace-wrapped form: same declaration, same semantics,
+# same optimization opt-in — only the invalid syntax changes. No compiler
+# flags altered. Idempotent and self-retiring (no-op on fixed toolkits).
+CUDA_REAL="$(readlink -f /usr/local/cuda)"
+CCCL_HITS="$(grep -rlE 'struct (::)?cuda::proclaims_copyable_arguments' "$CUDA_REAL" \
+    --include='*.cuh' --include='*.h' --include='*.inl' || true)"
+if [ -n "$CCCL_HITS" ]; then
+    echo "CCCL hotfix: patching:"; echo "$CCCL_HITS"
+    echo "$CCCL_HITS" | xargs -r perl -0777 -pi -e '
+      s/(template <[^>]*>)\s*\nstruct (?:::)?cuda::proclaims_copyable_arguments<(.*?)>(.*?)\{\};/namespace cuda {\n$1\nstruct proclaims_copyable_arguments<$2>$3\{\};\n} \/\/ namespace cuda (jetson hotfix)/gs'
+else
+    echo "CCCL hotfix: nothing to patch (headers already clean)"
+fi
+echo "CCCL hotfix: verifying..."
+if grep -rqE 'struct (::)?cuda::proclaims_copyable_arguments' "$CUDA_REAL" \
+    --include='*.cuh' --include='*.h' --include='*.inl'; then
+    echo "CCCL hotfix: FAILED — qualified specializations remain:"
+    grep -rnE 'struct (::)?cuda::proclaims_copyable_arguments' "$CUDA_REAL" \
+        --include='*.cuh' --include='*.h' --include='*.inl'
+    exit 1
+fi
+echo "CCCL hotfix: OK"
+# -----------------------------------------------------------------------------
