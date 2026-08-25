@@ -18,10 +18,10 @@ index f806a585..d052efe0 100644
 +        if blacklist:
 +            if os.path.isfile(blacklist):
 +                with open(blacklist) as file:
-+                    blacklist = file.readlines() #[x.strip() for x in file.readlines()]
-+                    blacklist = [x for x in blacklist if x]
++                    blacklist = [x.strip() for x in file.readlines()]
++                    blacklist = [normalize_name(x) for x in blacklist if x]
 +            else:
-+                blacklist = re.split(',|;|:', blacklist)
++                blacklist = [normalize_name(x.strip()) for x in re.split(',|;|:', blacklist) if x.strip()]
          for stage in self.sro():
              if stage.ixconfig["type"] == "mirror":
                  if private_hit:
