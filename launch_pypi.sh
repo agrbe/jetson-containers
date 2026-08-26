@@ -121,6 +121,13 @@ if [ ! -f "${CONFIGURED_MARKER}" ]; then
     # Disable local file storage for packages fetched from upstream PyPI
     devpi_exec devpi index root/pypi mirror_use_external_urls=true
 
+    # Resolve each project directly instead of consulting the enumerated list
+    # of every PyPI project. That list goes stale and its refresh times out, and
+    # devpi then answers "project does not exist" for anything missing from the
+    # stale copy -- which broke dependencies like mpmath, filelock and
+    # scikit-build while cached ones like numpy kept working.
+    devpi_exec devpi index root/pypi mirror_no_project_list=True
+
     # Centralized index that all user indexes inherit from
     echo "    Creating root/dev-pypi..."
     devpi_exec devpi index -c root/dev-pypi bases=root/pypi mirror_whitelist='*'
