@@ -1,3 +1,4 @@
 4b02e8ea1f1b65a8b3ecbffc5434c27ce88f80ec231b0c5d67a6efdd75f26002  wheel/onnxruntime_gpu-1.27.1-cp312-cp312-linux_aarch64.whl
+ca080957b7d99a6b5a4ed8f2dd3bacb95922b99c0e41d3c24733cc5088189fe1  wheel/torch-2.12.0-cp312-cp312-linux_aarch64.whl
 dd8140364f4db334ffb5d3bc3a866c4e5858d66ddd0f06f9cd95faf0eea58253  tarball/gdrcopy-2.5.2.tar.gz
 78977f89a6f2293055e323ca9e9a773b084f767218051d4aa1581570ded8628b  tarball/onnxruntime-gpu-1.27.1.tar.gz

@@ -30,6 +30,7 @@ PACKAGES=(
     python
     onnx
     onnxruntime:1.27.1
+    pytorch:2.12
 )
 
 # --- Environment pins ---------------------------------------------------------
