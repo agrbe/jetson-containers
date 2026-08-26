@@ -4,6 +4,8 @@
 # Builds the jetson-containers CUDA stack image on this Jetson (JetPack 7.2).
 #
 # Goals:
+# - Bring the local devpi/APT servers up before the build and tear them down
+#   afterwards, success or failure.
 # - Load version pins from .env and export them only to the builder process.
 # - Keep the interactive terminal output intact (colors/tty progress) while
 #   capturing the full orchestrator log to a file.
@@ -32,18 +34,14 @@ PACKAGES=(
 
 # --- Environment pins ---------------------------------------------------------
 ENV_FILE="${ENV_FILE:-./.env}"
-export LSB_RELEASE=24.04
-export L4T_VERSION=39.2
-export CUDA_VERSION=13.2
-export CUDNN_VERSION=9.20
-export TENSORRT_VERSION=10.16.2
 
-export LOCAL_PIP_INDEX_URL="https://pypi.org/simple"
+# --- Local package servers ----------------------------------------------------
+JC_REPO="${JC_REPO:-$HOME/Repositories/jetson-containers}"
+DEVPI_COMPOSE_FILE="${JC_REPO}/packages/net/devpi/compose.yml"
 
 # --- Logging ------------------------------------------------------------------
 # The log is written locally first, then moved into the per-run directory that
 # jetson-containers creates under $JC_REPO/logs (e.g. logs/20260817_153319/).
-JC_REPO="${JC_REPO:-$HOME/Repositories/jetson-containers}"
 LOG="build_$(date +%Y%m%d_%H%M%S).log"
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -77,11 +75,21 @@ load_env() {
     set +a
 }
 
+start_servers() {
+    # launch_pypi.sh starts devpi + APT and only returns once both answered.
+    # It also rewrites .env with the resolved URLs and upload credentials, so
+    # .env has to be sourced after it, not before.
+    "${JC_REPO}/launch_pypi.sh"
+    load_env
+}
+
 print_config() {
     echo "-----------------------------------------------------------------------------"
     echo "Imagem:   $IMAGE_NAME"
     echo "Pacotes:  ${PACKAGES[*]}"
     echo "Pins:     $ENV_FILE"
+    echo "Wheels:   ${DEVPI_URL:-<ausente>}"
+    echo "Tarballs: ${LOCAL_TAR_INDEX_URL:-<ausente>}"
     echo "Log:      $LOG"
     echo "-----------------------------------------------------------------------------"
 }
@@ -96,25 +104,29 @@ run_build() {
     script -q -e -c "$build_cmd" "$LOG"
 }
 
-finalize_log() {
-    # Runs on EXIT (success or failure) so the log is sanitized and co-located
-    # with the per-run files even when the build breaks. $? is preserved.
+cleanup() {
+    # Runs on EXIT (success or failure) so the servers are always stopped and
+    # the log is always consolidated. $? is captured first and re-raised last,
+    # so nothing in here can mask the build's exit code.
     local status=$?
     local run_dir
 
-    [[ -f "$LOG" ]] || return "$status"
+    echo "==> Encerrando servidores locais..."
+    docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
 
-    # Strip ANSI escape sequences in place ('script' captures the raw tty).
-    sed -i 's/\x1b\[[0-9;]*[A-Za-z]//g' "$LOG"
+    if [[ -f "$LOG" ]]; then
+        # Strip ANSI escape sequences in place ('script' captures the raw tty).
+        sed -i 's/\x1b\[[0-9;]*[A-Za-z]//g' "$LOG"
 
-    # Newest run directory created by jetson-containers during this execution.
-    # If none appeared (build failed before logging started), keep the log here.
-    run_dir="$(ls -1dt "${JC_REPO}/logs"/*/ 2>/dev/null | head -n1 || true)"
-    if [[ -n "$run_dir" && "$run_dir" != "$PRE_BUILD_RUN_DIR" ]]; then
-        mv "$LOG" "$run_dir"
-        echo "📄 Log consolidado: ${run_dir}${LOG}"
-    else
-        echo "📄 Log consolidado: ./${LOG} (diretório de run não identificado)"
+        # Newest run directory created by jetson-containers during this run.
+        # If none appeared (build failed early), keep the log where it is.
+        run_dir="$(ls -1dt "${JC_REPO}/logs"/*/ 2>/dev/null | head -n1 || true)"
+        if [[ -n "$run_dir" && "$run_dir" != "$PRE_BUILD_RUN_DIR" ]]; then
+            mv "$LOG" "$run_dir"
+            echo "📄 Log consolidado: ${run_dir}${LOG}"
+        else
+            echo "📄 Log consolidado: ./${LOG} (diretório de run não identificado)"
+        fi
     fi
 
     return "$status"
@@ -127,17 +139,21 @@ finalize_log() {
 require_command jetson-containers
 require_command script
 require_command sed
+require_command docker
 
 # -----------------------------------------------------------------------------
 # Build execution
 # -----------------------------------------------------------------------------
 
-# load_env
-print_config
-
 # Snapshot the newest run dir BEFORE building: comparing afterwards tells us
 # whether this execution actually created a new logs/<timestamp>/ directory.
 PRE_BUILD_RUN_DIR="$(ls -1dt "${JC_REPO}/logs"/*/ 2>/dev/null | head -n1 || true)"
-trap finalize_log EXIT
+
+# Registered before the servers start so they are torn down even if the build
+# never gets going.
+trap cleanup EXIT
+
+start_servers
+print_config
 
 run_build

@@ -21,3 +21,10 @@ nv_tegra_release
 kokoro-*-*.wav
 audio.wav
 benchmark.csv
+
+# Compiled artifacts: the binaries stay out of git, the manifest is tracked
+dist/wheel/
+dist/tarball/
+
+# Local devpi/APT server state (published wheels and tarballs)
+packages/net/devpi/cache/

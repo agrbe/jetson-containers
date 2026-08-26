@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: "no"
     ports:
       - '${DEVPI_PORT:-3141}:3141'
     volumes:
@@ -19,7 +19,7 @@ services:
     build:
       context: apt
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: "no"
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     ports:
       - '${APT_PORT:-8034}:8080'
