@@ -55,7 +55,7 @@ require_command() {
 
     # Checking tools upfront keeps failures clear and avoids wasting build time.
     if ! command -v "$cmd" >/dev/null 2>&1; then
-        echo "❌ Comando obrigatório não encontrado: $cmd"
+        echo "Required command not found: $cmd"
         exit 1
     fi
 }
@@ -63,7 +63,7 @@ require_command() {
 load_env() {
     # Fail with a clear message instead of the terse error 'set -e' would give.
     if [[ ! -f "$ENV_FILE" ]]; then
-        echo "❌ Arquivo de pins não encontrado: $ENV_FILE"
+        echo "Pin file not found: $ENV_FILE"
         exit 1
     fi
 
@@ -86,11 +86,11 @@ start_servers() {
 
 print_config() {
     echo "-----------------------------------------------------------------------------"
-    echo "Imagem:   $IMAGE_NAME"
-    echo "Pacotes:  ${PACKAGES[*]}"
+    echo "Image:    $IMAGE_NAME"
+    echo "Packages: ${PACKAGES[*]}"
     echo "Pins:     $ENV_FILE"
-    echo "Wheels:   ${DEVPI_URL:-<ausente>}"
-    echo "Tarballs: ${LOCAL_TAR_INDEX_URL:-<ausente>}"
+    echo "Wheels:   ${DEVPI_URL:-<absent>}"
+    echo "Tarballs: ${LOCAL_TAR_INDEX_URL:-<absent>}"
     echo "Log:      $LOG"
     echo "-----------------------------------------------------------------------------"
 }
@@ -101,7 +101,7 @@ run_build() {
     # 'script' allocates a PTY so the builder still renders colors and tty
     # progress on screen, while everything is captured raw into $LOG.
     # '-e' propagates the real build exit code through 'script'.
-    build_cmd="jetson-containers build --name=${IMAGE_NAME} ${PACKAGES[*]}"
+    build_cmd="jetson-containers build --buildkit-progress=plain --name=${IMAGE_NAME} ${PACKAGES[*]}"
     script -q -e -c "$build_cmd" "$LOG"
 }
 
@@ -112,7 +112,7 @@ cleanup() {
     local status=$?
     local run_dir
 
-    echo "==> Encerrando servidores locais..."
+    echo "==> Stopping the local servers..."
     docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
 
     if [[ -f "$LOG" ]]; then
@@ -124,9 +124,9 @@ cleanup() {
         run_dir="$(ls -1dt "${JC_REPO}/logs"/*/ 2>/dev/null | head -n1 || true)"
         if [[ -n "$run_dir" && "$run_dir" != "$PRE_BUILD_RUN_DIR" ]]; then
             mv "$LOG" "$run_dir"
-            echo "📄 Log consolidado: ${run_dir}${LOG}"
+            echo "Log: ${run_dir}${LOG}"
         else
-            echo "📄 Log consolidado: ./${LOG} (diretório de run não identificado)"
+            echo "Log: ./${LOG} (run directory not identified)"
         fi
     fi
 
