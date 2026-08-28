@@ -20,13 +20,13 @@ def cuda_stack_args():
 
     # Determine component versions based on L4T/CUDA version
     if IS_TEGRA:
-        if L4T_VERSION.major >= 39:  # JetPack 6 on Orin
-            cudnn_ver = '9.21.1'
-            cudnn_url = f"https://developer.download.nvidia.com/compute/cudnn/9.21.1/local_installers/cudnn-local-repo-{distro}-9.21.1_1.0-1_arm64.deb"
+        if L4T_VERSION.major >= 39:  # JetPack 7 on Orin
+            cudnn_ver = '9.24.0'
+            cudnn_url = f"https://developer.download.nvidia.com/compute/cudnn/9.24.0/local_installers/cudnn-local-repo-{distro}-9.24.0_1.0-1_arm64.deb"
             cudnn_packages = "libcudnn9-cuda-13 libcudnn9-dev-cuda-13 libcudnn9-samples"
             tensorrt_ver = '10.16.1'
             tensorrt_url = f"{tensorrt_base_url}/10.16.1/tars/TensorRT-10.16.1.11.Linux.aarch64-gnu.cuda-13.2.tar.gz"
-            nccl_ver = '2.29.7'
+            nccl_ver = '2.30.4'
             nccl_url = f"https://developer.download.nvidia.com/compute/redist/nccl/v{nccl_ver}/nccl_{nccl_ver}-1+cuda13.2_aarch64.txz"
         elif L4T_VERSION.major >= 36:  # JetPack 6
             if CUDA_VERSION >= Version('13.2'):
@@ -92,8 +92,8 @@ def cuda_stack_args():
     # Extract DEB name from URL
     cudnn_deb = os.path.basename(cudnn_url).split('_')[0] if cudnn_url else ""
 
-    cusparselt_ver = '0.9.0'
-    # CUDA 12.9 is no longer supported for CUSPARSELT_VERSION=0.9.0
+    cusparselt_ver = '0.9.1'
+    # CUDA 12.9 is no longer supported for CUSPARSELT_VERSION>=0.9.0
     if CUDA_VERSION <= Version('12.9'):
         cusparselt_ver = '0.8.1'
 
@@ -117,10 +117,10 @@ def cuda_stack_args():
         # Additional libraries
         'CUDSS_VERSION': '0.7.1',
         'CUSPARSELT_VERSION': cusparselt_ver,
-        'CUTENSOR_VERSION': '2.6.0',
-        'GDRCOPY_VERSION': '2.5.2',
+        'CUTENSOR_VERSION': '2.7.0',
+        'GDRCOPY_VERSION': '2.6',
         'NVPL_VERSION': '25.11',
-        'NVSHMEM_VERSION': '3.6.5',
+        'NVSHMEM_VERSION': '3.7.2',
 
         # Architecture and CUDA info
         'CUDA_ARCH': CUDA_ARCH,

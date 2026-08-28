@@ -220,7 +220,7 @@ if IS_TEGRA:
     package = [
         # JetPack 7
         cuda_package('13.2',
-                     'https://developer.download.nvidia.com/compute/cuda/13.2.1/local_installers/cuda-repo-ubuntu2204-13-2-local_13.2.1-595.58.03-1_arm64.deb',
+                     'https://developer.download.nvidia.com/compute/cuda/13.2.2/local_installers/cuda-repo-ubuntu2404-13-2-local_13.2.2-595.71.05-1_arm64.deb',
                      requires='aarch64'),
         cuda_samples('13.2', requires='>=36'),
 
