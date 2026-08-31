@@ -105,7 +105,7 @@ export USE_NATIVE_ARCH=0
 export USE_TENSORPIPE=1
 export USE_FLASH_ATTENTION=1
 export USE_MEM_EFF_ATTENTION=1
-export USE_TENSORRT=0
+export USE_TENSORRT=1
 export USE_BLAS="$USE_BLAS"
 export BLAS="$BLAS"
 python3 setup.py bdist_wheel --dist-dir /opt
