@@ -30,6 +30,8 @@ PACKAGES=(
     onnx
     onnxruntime:1.29.0
     pytorch:2.12
+    ffmpeg:8.1.2
+    torchaudio:2.12.0
 )
 
 # --- Environment pins ---------------------------------------------------------
