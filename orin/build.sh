@@ -12,7 +12,12 @@
 # - Store an ANSI-free copy of the log for grep/diagnosis.
 #
 # Usage:
-#   ./build.sh
+#   ./build.sh [--simulate]
+#
+# Options:
+#   --simulate   Forward --simulate to jetson-containers: print the build
+#                commands and the resolved dependency chain without building.
+#   -h, --help   Show usage and exit.
 #
 # Optional variables:
 #   ENV_FILE=./.env             -> pin file sourced before the build
@@ -32,7 +37,18 @@ PACKAGES=(
     pytorch:2.12
     ffmpeg:8.1.2
     torchaudio:2.12.0
+    torchvision:0.27.0
+    torch_tensorrt
+    torch2trt
+    triton
+    nvidia_modelopt
+    tensorrt_llm
+    tensorrt_edgellm
 )
+
+# --- Behavior flags -----------------------------------------------------------
+# Dry-run mode. Set by --simulate and read only by run_build/print_config.
+SIMULATE=0
 
 # --- Environment pins ---------------------------------------------------------
 ENV_FILE="${ENV_FILE:-./.env}"
@@ -50,6 +66,17 @@ LOG="build_$(date +%Y%m%d_%H%M%S).log"
 # -----------------------------------------------------------------------------
 # Helper functions
 # -----------------------------------------------------------------------------
+
+usage() {
+    cat <<'EOF'
+Usage: ./build.sh [options]
+
+Options:
+  --simulate   Forward --simulate to jetson-containers: print the build
+               commands and the resolved dependency chain without building.
+  -h, --help   Show this message and exit.
+EOF
+}
 
 require_command() {
     local cmd="$1"
@@ -93,16 +120,26 @@ print_config() {
     echo "Wheels:   ${DEVPI_URL:-<absent>}"
     echo "Tarballs: ${LOCAL_TAR_INDEX_URL:-<absent>}"
     echo "Log:      $LOG"
+    if [[ "$SIMULATE" -eq 1 ]]; then
+        echo "Mode:     simulate (no image is built)"
+    fi
     echo "-----------------------------------------------------------------------------"
 }
 
 run_build() {
     local build_cmd
+    local build_args=(--buildkit-progress=plain "--name=${IMAGE_NAME}")
+
+    # --simulate makes jetson-containers resolve the dependency chain and print
+    # the docker commands without running them.
+    if [[ "$SIMULATE" -eq 1 ]]; then
+        build_args+=(--simulate)
+    fi
 
     # 'script' allocates a PTY so the builder still renders colors and tty
     # progress on screen, while everything is captured raw into $LOG.
     # '-e' propagates the real build exit code through 'script'.
-    build_cmd="jetson-containers build --buildkit-progress=plain --name=${IMAGE_NAME} ${PACKAGES[*]}"
+    build_cmd="jetson-containers build ${build_args[*]} ${PACKAGES[*]}"
     script -q -e -c "$build_cmd" "$LOG"
 }
 
@@ -133,6 +170,34 @@ cleanup() {
 
     return "$status"
 }
+
+# -----------------------------------------------------------------------------
+# Argument parsing
+# -----------------------------------------------------------------------------
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --simulate)
+                SIMULATE=1
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Parsed before the requirement checks so --help works on a host that lacks
+# docker or jetson-containers.
+parse_args "$@"
 
 # -----------------------------------------------------------------------------
 # Requirement checks
