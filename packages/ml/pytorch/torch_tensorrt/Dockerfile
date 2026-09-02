@@ -23,29 +23,41 @@ ARG JETPACK_MAJOR \
 ARG VENV_DIR=/opt/venv \
     TRT_SHIM=/opt/tensorrt
 
-# Locate the TensorRT install from cudastack and expose it in the flat include/ + lib/
+# Locate the TensorRT install (JetPack .deb layout via tensorrt:jetpack, or the cudastack
+# tarball layout) and expose it in the flat include/ + lib/
 # layout that upstream's third_party/tensorrt/archive:BUILD expects. Fail fast if missing.
 RUN set -e; \
     TRT_LIB="$(ldconfig -p | awk '/libnvinfer\.so\.10 /{print $NF; exit}')"; \
     [ -n "$TRT_LIB" ] || TRT_LIB="$(find /usr/local/cuda/targets /usr/lib/aarch64-linux-gnu /usr/local/lib -name 'libnvinfer.so.10' 2>/dev/null | head -1)"; \
     [ -n "$TRT_LIB" ] || { echo "ERROR: libnvinfer.so.10 not found; base image lacks TensorRT (cudastack WITH_TENSORRT=1)" >&2; exit 1; }; \
     TRT_LIB_DIR="$(dirname "$TRT_LIB")"; \
-    [ -e /usr/include/NvInfer.h ] || { echo "ERROR: /usr/include/NvInfer.h not found; TensorRT headers missing in base image" >&2; exit 1; }; \
-    [ -e /usr/include/NvInferPlugin.h ] || { echo "ERROR: /usr/include/NvInferPlugin.h not found" >&2; exit 1; }; \
+    TRT_INC_DIR="$(dirname "$(find /usr/include -maxdepth 2 -name NvInfer.h -print -quit 2>/dev/null)")"; \
+    [ -e "$TRT_INC_DIR/NvInfer.h" ] || { echo "ERROR: NvInfer.h not found under /usr/include; TensorRT headers missing in base image" >&2; exit 1; }; \
+    [ -e "$TRT_INC_DIR/NvInferPlugin.h" ] || { echo "ERROR: $TRT_INC_DIR/NvInferPlugin.h not found" >&2; exit 1; }; \
     mkdir -p ${TRT_SHIM}/include ${TRT_SHIM}/lib; \
-    for h in /usr/include/Nv*.h; do ln -sf "$h" ${TRT_SHIM}/include/; done; \
+    for h in "$TRT_INC_DIR"/Nv*.h; do ln -sf "$h" ${TRT_SHIM}/include/; done; \
     for l in "$TRT_LIB_DIR"/libnv*.so*; do ln -sf "$l" ${TRT_SHIM}/lib/; done; \
     for base in libnvinfer libnvinfer_plugin libnvonnxparser; do \
         [ -e ${TRT_SHIM}/lib/${base}.so ] || { [ -e "$TRT_LIB_DIR/${base}.so.10" ] && ln -s "$TRT_LIB_DIR/${base}.so.10" ${TRT_SHIM}/lib/${base}.so; } || true; \
     done; \
     [ -e ${TRT_SHIM}/lib/libnvinfer.so ] && [ -e ${TRT_SHIM}/lib/libnvinfer_plugin.so ] || { echo "ERROR: could not create libnvinfer.so / libnvinfer_plugin.so links in ${TRT_SHIM}/lib" >&2; exit 1; }; \
+    # libnvinfer dlopen()s libnvinfer_builder_resource_smXX.so.<version> by file name. Their SONAME is
+    # "do_not_link_against_*", so ld.so.cache cannot resolve them, and the tarball dir is not on
+    # LD_LIBRARY_PATH nor a default loader dir -> engine builds fail on Orin (sm86 family). Default
+    # loader dirs are searched by file name, so link the resources there.
+    if [ "$TRT_LIB_DIR" != /usr/lib/aarch64-linux-gnu ]; then \
+        for r in "$TRT_LIB_DIR"/libnvinfer_builder_resource*.so*; do [ -e "$r" ] && ln -sfn "$r" /usr/lib/aarch64-linux-gnu/; done; \
+        ldconfig; \
+    fi; \
+    ls /usr/lib/aarch64-linux-gnu/libnvinfer_builder_resource_sm86* >/dev/null 2>&1 || { echo "ERROR: libnvinfer_builder_resource_sm86 not reachable by the loader" >&2; exit 1; }; \
     echo "TensorRT libs : $TRT_LIB_DIR"; \
-    echo "TensorRT ver  : $(grep -h 'define NV_TENSORRT_\(MAJOR\|MINOR\|PATCH\|BUILD\)' /usr/include/NvInferVersion.h | awk '{print $3}' | paste -sd.)"; \
+    echo "TensorRT hdrs : $TRT_INC_DIR"; \
+    echo "TensorRT ver  : $(grep -h 'define NV_TENSORRT_\(MAJOR\|MINOR\|PATCH\|BUILD\)' "$TRT_INC_DIR/NvInferVersion.h" | awk '{print $3}' | paste -sd.)"; \
     ls -l ${TRT_SHIM}/lib/libnvinfer.so ${TRT_SHIM}/lib/libnvinfer_plugin.so
 
 # Build torch_tensorrt from source (SBSA config) against:
 #   - libtorch : the torch in the venv (MODULE.bazel local_torch(); TORCH_PATH pins it)
-#   - TensorRT : the cudastack install via ${TRT_SHIM} (replaces the http_archive tarball download)
+#   - TensorRT : the system install via ${TRT_SHIM} (replaces the http_archive tarball download)
 #   - CUDA     : /usr/local/cuda (upstream hardcodes /usr/local/cuda-13.0)
 RUN case "${TORCH_TRT_VERSION}" in \
         v[0-9]*) export RELEASE=1 BUILD_VERSION="${TORCH_TRT_VERSION#v}" ;; \
@@ -80,12 +92,15 @@ RUN case "${TORCH_TRT_VERSION}" in \
     cd / && rm -rf /tmp/torch_tensorrt /root/.cache/bazel
 
 # Install the wheel plus Python bindings that use the already-installed libnvinfer:
+#   0. bindings already importable (python3-libnvinfer linked by tensorrt:jetpack) -> nothing
 #   1. the `tensorrt-*.whl` that cudastack copied out of the tarball (bindings only, no libs)
 #   2. otherwise the PyPI bindings wheel, without tensorrt-cu13-libs
 # Then verify no second copy of libnvinfer landed in the venv, and that libtorchtrt links the system one.
 RUN uv pip install /opt/torch_tensorrt*.whl && \
     TRT_WHL="$(ls /usr/local/lib/python${PYTHON_VERSION}/dist-packages/tensorrt-10*-cp$(echo ${PYTHON_VERSION} | tr -d .)-*.whl 2>/dev/null | head -1)"; \
-    if [ -n "$TRT_WHL" ]; then \
+    if python3 -c "import tensorrt" >/dev/null 2>&1; then \
+        echo "TensorRT bindings already importable (tensorrt:jetpack), nothing to install"; \
+    elif [ -n "$TRT_WHL" ]; then \
         echo "Installing TensorRT bindings from tarball wheel: $TRT_WHL"; \
         uv pip install --no-deps "$TRT_WHL"; \
     else \
@@ -97,6 +112,7 @@ RUN uv pip install /opt/torch_tensorrt*.whl && \
     ( ! ls -d ${VENV_DIR}/lib/python*/site-packages/tensorrt_libs >/dev/null 2>&1 || \
       { echo "ERROR: PyPI tensorrt_libs ended up in the venv (second libnvinfer copy)" >&2; exit 1; } ) && \
     ldd ${VENV_DIR}/lib/python*/site-packages/torch_tensorrt/lib/libtorchtrt.so | grep -E 'nvinfer|libtorch|libc10' && \
+    python3 -c "import numpy as np, tensorrt as trt; b = trt.Builder(trt.Logger(trt.Logger.WARNING)); n = b.create_network(0); x = n.add_input('x', trt.float32, (1,3,8,8)); c = n.add_convolution_nd(x, 4, (3,3), trt.Weights(np.ones((4,3,3,3), np.float32))); n.mark_output(c.get_output(0)); p = b.build_serialized_network(n, b.create_builder_config()); assert p is not None, 'engine build failed'; print('engine build OK', len(bytes(p)), 'bytes')" && \
     uv cache clean \
     || exit 1; \
     twine upload --verbose /opt/torch_tensorrt*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
