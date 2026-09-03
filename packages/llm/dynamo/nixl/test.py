@@ -17,7 +17,8 @@ if __name__ == "__main__":
     buf_size = 256
     # Allocate memory and register with NIXL
 
-    logger.info("Using NIXL Plugins from:\n%s", os.environ["NIXL_PLUGIN_DIR"])
+    # NIXL_PLUGIN_DIR is only set by source builds; the PyPI wheel bundles its plugins.
+    logger.info("Using NIXL Plugins from:\n%s", os.environ.get("NIXL_PLUGIN_DIR", "<wheel default>"))
 
     # Example using nixl_agent_config
     agent_config = nixl_agent_config(backends=["UCX"])
@@ -53,7 +54,11 @@ if __name__ == "__main__":
     agent1_reg_descs_np = nixl_agent1.get_reg_descs(agent1_addrs_np, "DRAM")
 
     assert agent1_xfer_descs == agent1_xfer_descs_np
-    assert agent1_reg_descs == agent1_reg_descs_np
+    # nixlRegDList equality includes meta info; numpy input yields empty meta,
+    # so compare against tuples with empty meta instead of agent1_strings ("a"/"b").
+    assert agent1_reg_descs_np == nixl_agent1.get_reg_descs(
+        [(a, l, d, "") for a, l, d in agent1_addrs], "DRAM"
+    )
     logger.debug(
         "Registration descriptors: %s %s", agent1_reg_descs, agent1_reg_descs_np
     )

@@ -23,10 +23,13 @@ make -j
 make install
 ldconfig
 
+rm -rf /opt/venv/lib/python3.12/site-packages/mooncake
+
 cd /opt/mooncake/
 bash ./scripts/build_wheel.sh
 ls /opt/mooncake/mooncake-wheel/dist
 uv pip install /opt/mooncake/mooncake-wheel/dist/mooncake_transfer_engine*.whl
+uv pip install "setuptools<82"
 
 cd /opt/mooncake
 

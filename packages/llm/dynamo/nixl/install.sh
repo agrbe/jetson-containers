@@ -32,4 +32,4 @@ if [ "$FORCE_BUILD" == "on" ]; then
 fi
 
 uv pip install "nixl~=${NIXL_VERSION}" || \
-uv pip install "nixl~=${NIXL_VERSION_SPEC}"
+uv pip install "nixl-cu13~=${NIXL_VERSION_SPEC}"

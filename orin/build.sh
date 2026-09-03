@@ -40,10 +40,7 @@ PACKAGES=(
     torchvision:0.27.0
     torch_tensorrt
     torch2trt
-    # triton
-    # nvidia_modelopt
-    # tensorrt_llm
-    # tensorrt_edgellm
+    triton
 )
 
 # --- Behavior flags -----------------------------------------------------------
