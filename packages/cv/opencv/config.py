@@ -50,7 +50,7 @@ package = [
     opencv('4.14.0', '>=36', default=(CUDA_VERSION >= Version('13.2'))), # Thor Support
 
     # JetPack 4
-    opencv('4.5.0', '==32.*', default=True, url='https://nvidia.box.com/shared/static/5v89u6g5rb62fpz4lh0rz531ajo2t5ef.gz'),
+    opencv('5.0.0', '==32.*', default=True, url='https://nvidia.box.com/shared/static/5v89u6g5rb62fpz4lh0rz531ajo2t5ef.gz'),
 
     # Debians (c++)
     opencv('4.5.0', '==35.*', default=False, url='https://nvidia.box.com/shared/static/2hssa5g3v28ozvo3tc3qwxmn78yerca9.gz'),

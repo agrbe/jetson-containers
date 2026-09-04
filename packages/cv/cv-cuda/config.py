@@ -57,7 +57,7 @@ package = [
     ),
 
     # x86
-    cv_cuda('0.16',
+    cv_cuda('0.17.0',
         'v0.16.0/cvcuda-lib-0.16.0-cuda12-x86_64-linux.deb',
         'v0.16.0/cvcuda-dev-0.16.0-cuda12-x86_64-linux.deb',
         'v0.16.0/cvcuda-tests-0.16.0-cuda12-x86_64-linux.deb',

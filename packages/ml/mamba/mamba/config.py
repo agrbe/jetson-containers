@@ -26,5 +26,5 @@ def mamba(version, version_spec=None, requires=None, default=False):
     return pkg, builder
 
 package = [
-    mamba('2.3.1', default=True)
+    mamba('2.3.2.post1', default=True)
 ]
