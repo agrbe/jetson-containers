@@ -41,6 +41,7 @@ PACKAGES=(
     torch_tensorrt
     torch2trt
     triton
+    tensorrt_llm
 )
 
 # --- Behavior flags -----------------------------------------------------------

@@ -17,7 +17,7 @@ if [[ "${TRT_LLM_BRANCH}" == *"jetson"* ]]; then
     DEV_REQUIREMENTS_FILENAME="requirements-dev-jetson.txt"
 fi
 
-     
+
 sed -i '/^diffusers[[:space:]=<>!]/d' "${REQUIREMENTS_FILENAME}"
 sed -i 's/==/>=/g' "${REQUIREMENTS_FILENAME}"
 sed -i 's/cuda-python.*/cuda-python/g' "${REQUIREMENTS_FILENAME}"
@@ -25,19 +25,33 @@ sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
 sed -i 's|^torch.*|torch|' "${REQUIREMENTS_FILENAME}"
 sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
 
-uv pip install -r "${REQUIREMENTS_FILENAME}" 
+uv pip install -r "${REQUIREMENTS_FILENAME}"
 uv pip install -r "${DEV_REQUIREMENTS_FILENAME}"
 
-# Install TensorRT Wheel First to ensure libs are present
-TRT_WHEEL=$(find /usr -name "tensorrt-*-cp310-*-linux_aarch64.whl" -print -quit)
-
-if [ -f "$TRT_WHEEL" ]; then
-    echo "Installing existing TensorRT wheel: $TRT_WHEEL"
-    uv pip install "$TRT_WHEEL"
+# TensorRT python bindings for this interpreter, without depending on earlier stages:
+# 1) already importable -> keep; 2) tarball wheel left by cudastack -> install (no libs);
+# 3) PyPI bindings-only wheel -> install (no libs; libnvinfer comes from the system).
+PY_TAG=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+TRT_VER=$(python3 - <<'PYEOF'
+import re, glob
+h = next(iter(glob.glob('/usr/include/**/NvInferVersion.h', recursive=True)), None)
+v = dict(re.findall(r'#define NV_TENSORRT_(MAJOR|MINOR|PATCH)\s+(\d+)', open(h).read())) if h else {}
+print(f"{v.get('MAJOR', '10')}.{v.get('MINOR', '')}".rstrip('.'))
+PYEOF
+)
+if python3 -c "import tensorrt" >/dev/null 2>&1; then
+    echo "TensorRT bindings already present: $(python3 -c 'import tensorrt as t; print(t.__version__)')"
 else
-    echo "CRITICAL: TensorRT wheel not found. Build cannot proceed."
-    exit 1
+    TRT_WHEEL=$(find /usr -name "tensorrt-*-${PY_TAG}-*-linux_aarch64.whl" -print -quit)
+    if [ -f "$TRT_WHEEL" ]; then
+        echo "Installing TensorRT bindings from tarball wheel: $TRT_WHEEL"
+        uv pip install --no-deps "$TRT_WHEEL"
+    else
+        echo "Tarball wheel for ${PY_TAG} not found; installing PyPI bindings ${TRT_VER}.* without libs"
+        uv pip install --no-deps "tensorrt-cu13-bindings==${TRT_VER}.*"
+    fi
 fi
+python3 -c "import tensorrt as t; print('tensorrt', t.__version__, t.__file__)"
 
 echo "Configuring build environment to use existing TensorRT..."
 
@@ -50,11 +64,11 @@ if [ ! -d "/usr/local/tensorrt" ]; then
     # Find where libnvinfer is installed on the system (e.g. /usr/lib/aarch64-linux-gnu)
     # We prioritize the system root /usr
     LIBNVINFER_PATH=$(find /usr -name "libnvinfer.so.*" 2>/dev/null | head -n 1)
-    
+
     if [ -n "$LIBNVINFER_PATH" ]; then
         TRT_SYS_LIB_DIR=$(dirname "$LIBNVINFER_PATH")
         echo "Found system TensorRT libraries at: $TRT_SYS_LIB_DIR"
-        
+
         # Symlink libraries to the compatibility directory
         # We assume if we found one, others are there too.
         ln -sf "$TRT_SYS_LIB_DIR"/libnvinfer* /usr/local/tensorrt/lib/
@@ -81,7 +95,7 @@ if [ ! -d "/usr/local/tensorrt" ]; then
 
     # 3. Create Development Symlinks (libnvinfer.so -> libnvinfer.so.10)
     cd /usr/local/tensorrt/lib
-    
+
     for LIB in libnvinfer libnvonnxparser libnvinfer_plugin; do
         if [ ! -f "${LIB}.so" ]; then
              TARGET=$(ls ${LIB}.so.* | head -n 1)
@@ -93,12 +107,12 @@ if [ ! -d "/usr/local/tensorrt" ]; then
              fi
         fi
     done
-    
+
     cd ${SOURCE_DIR}
 
     # Compatibility for lib64 search
     ln -sf lib /usr/local/tensorrt/lib64
-    
+
     echo "Listing TRT libs in /usr/local/tensorrt/lib (FINAL):"
     ls -l /usr/local/tensorrt/lib
 fi
@@ -112,7 +126,7 @@ CUTLASS_PYTHON_DIR="3rdparty/cutlass/python"
 
 if [ -d "$CUTLASS_PYTHON_DIR" ]; then
     cd "$CUTLASS_PYTHON_DIR"
-    
+
     if [ ! -f "setup.py" ]; then
         ln -sf setup_library.py setup.py
     fi
@@ -121,29 +135,27 @@ if [ -d "$CUTLASS_PYTHON_DIR" ]; then
     uv pip install . || exit 1
 
     echo "Injecting skip logic into setup script..."
-    
+
     sed -i '/def perform_setup():/a \    print("CUTLASS already installed via build.sh. Skipping internal setup."); return' setup_library.py
-    
+
     grep "Skipping internal setup" setup_library.py || echo "WARNING: Sed injection might have failed"
 
     cd ${SOURCE_DIR}
 else
-    echo "CRITICAL: CUTLASS directory missing!"
-    exit 1
+    echo "No ${CUTLASS_PYTHON_DIR} (TRT-LLM >= 1.3 fetches cutlass via CMake FetchContent); skipping"
 fi
 
-# Patched: removed --python_bindings as it is not supported in this version
-# Patched: added --trt_root to point to compatibility layout
+# Patched: --python_bindings, --benchmarks and --trt_root do not exist in build_wheel.py 1.3.x
+# (TRT-LLM 1.3 cmake does not link libnvinfer). --job_count caps parallel nvcc (1.5-4 GB each).
 python3 ${SOURCE_DIR}/scripts/build_wheel.py \
         --clean \
         --build_type Release \
         --cuda_architectures "${CUDA_ARCHS}" \
         --build_dir ${BUILD_DIR} \
         --dist_dir $PIP_WHEEL_DIR \
-        --extra-cmake-vars "ENABLE_MULTI_DEVICE=0;TORCH_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=1" \
-        --benchmarks \
-        --use_ccache \
-        --trt_root /usr/local/tensorrt
+        --extra-cmake-vars "ENABLE_MULTI_DEVICE=0;ENABLE_UCX=0;TORCH_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=1" \
+        --job_count "${TRT_LLM_JOBS:-8}" \
+        --use_ccache
 
 uv pip install $PIP_WHEEL_DIR/tensorrt_llm*.whl
 

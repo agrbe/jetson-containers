@@ -38,13 +38,16 @@ export LD_LIBRARY_PATH=${CUDA_HOME}/lib64/stubs:${LD_LIBRARY_PATH}
 export LIBRARY_PATH=${CUDA_HOME}/lib64/stubs:${LIBRARY_PATH}
 if [[ "${TORCH_CUDA_ARCH_LIST}" == "8.7" ]]; then
     export FLASHINFER_CUDA_ARCH_LIST="8.7"
-    uv pip install cuda-python==12.8.0 --index-url https://pypi.org/simple/
+    uv pip install cuda-python==13.2.0 --default-index https://pypi.org/simple/
+    # Orin: CuTe DSL (nvidia-cutlass-dsl) is Blackwell-only; drop it from the wheel's
+    # dependencies (pyproject reads requirements.txt) so consumers don't inherit the pin.
+    sed -i '/^nvidia-cutlass-dsl/d' requirements.txt
 else
   export FLASHINFER_CUDA_ARCH_LIST="8.7 9.0a 10.0a 10.3a 11.0f 12.0f"
 fi
 
 uv pip install apache-tvm-ffi
-sed -i '/nvidia-cutlass-dsl>=4\.2\.1/d' requirements.txt
+# sed -i '/nvidia-cutlass-dsl>=4\.2\.1/d' requirements.txt
 uv pip install -r requirements.txt --prerelease=allow
 cd /opt/flashinfer/
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer wheel"

@@ -2,7 +2,7 @@
 # name: tensorrt_llm
 # group: llm
 # config: config.py
-# depends: [cudastack:standard, pytorch, transformers, cuda-python, nixl]
+# depends: [cudastack:standard, pytorch, transformers, cuda-python, nixl, flashinfer]
 # buildkit_device: nvidia.com/gpu=all
 # test: [test.py]
 # requires: '>=35'
