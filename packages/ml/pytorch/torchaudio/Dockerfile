@@ -2,7 +2,7 @@
 # name: torchaudio
 # group: pytorch
 # config: config.py
-# depends: [pytorch, cmake, torchcodec]
+# depends: [pytorch, cmake, torchcodec, ffmpeg]
 # buildkit_device: nvidia.com/gpu=all
 # test: test.py
 #---
