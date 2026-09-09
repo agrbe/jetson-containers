@@ -16,6 +16,6 @@ ARG NVIDIA_MODELOPT_VERSION \
 
 COPY build.sh install.sh /tmp/NVIDIA_MODELOPT/
 
-COPY benchmarks /tmp/NVIDIA_MODELOPT/benchmarks
+# COPY benchmarks /tmp/NVIDIA_MODELOPT/benchmarks
 
 RUN /tmp/NVIDIA_MODELOPT/install.sh || /tmp/NVIDIA_MODELOPT/build.sh
