@@ -97,6 +97,11 @@ elif [ "${TENSORRT_URL%.tar.gz}" != "$TENSORRT_URL" ] || [ "${TENSORRT_URL%.tgz}
     echo "${LIB_DIR}" > /etc/ld.so.conf.d/tensorrt.conf
     ldconfig
 
+    # Create symlinks for libnvinfer_builder_resource*.so* in /usr/lib/aarch64-linux-gnu/
+    for r in "${LIB_DIR}"/libnvinfer_builder_resource*.so*; do
+        [ -e "$r" ] && ln -sfn "$r" /usr/lib/aarch64-linux-gnu/
+    done
+
     # Cleanup
     cd ..
     rm -rf tensorrt-extracted "${FILENAME}"
@@ -124,4 +129,3 @@ else
 fi
 rm -rf /tmp/*.deb
 echo "TensorRT ${TENSORRT_VERSION} installation complete"
-
