@@ -9,4 +9,10 @@ fi
 uv pip install flashinfer-python==${FLASHINFER_VERSION} --prerelease=allow || \
 uv pip install flashinfer-python==${FLASHINFER_VERSION_SPEC} --prerelease=allow
 
+uv pip install flashinfer-cubin==${FLASHINFER_VERSION} --prerelease=allow || \
+uv pip install flashinfer-cubin==${FLASHINFER_VERSION_SPEC} --prerelease=allow
+
+uv pip install flashinfer-jit-cache==${FLASHINFER_VERSION} --prerelease=allow || \
+uv pip install flashinfer-jit-cache==${FLASHINFER_VERSION_SPEC} --prerelease=allow
+
 uv pip show flashinfer_python && python3 -c 'import flashinfer'
