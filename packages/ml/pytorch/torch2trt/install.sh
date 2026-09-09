@@ -313,6 +313,7 @@ main() {
 
     log_step "6/7" "Extras"
     install_extras
+    twine upload --verbose "$SOURCE_DIR"/dist/torch2trt-*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
 
     log_step "7/7" "Cleanup"
     cleanup_build_artifacts
