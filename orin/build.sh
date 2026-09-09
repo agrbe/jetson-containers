@@ -12,12 +12,14 @@
 # - Store an ANSI-free copy of the log for grep/diagnosis.
 #
 # Usage:
-#   ./build.sh [--simulate]
+#   ./build.sh [--simulate] [--keep-running]
 #
 # Options:
-#   --simulate   Forward --simulate to jetson-containers: print the build
-#                commands and the resolved dependency chain without building.
-#   -h, --help   Show usage and exit.
+#   --simulate       Forward --simulate to jetson-containers: print the build
+#                    commands and the resolved dependency chain without building.
+#   --keep-running   Leave the devpi/APT containers up after the build instead
+#                    of tearing them down on exit.
+#   -h, --help       Show usage and exit.
 #
 # Optional variables:
 #   ENV_FILE=./.env             -> pin file sourced before the build
@@ -38,15 +40,18 @@ PACKAGES=(
     ffmpeg:8.1.2
     torchaudio:2.12.0
     torchvision:0.27.0
+    triton
     torch_tensorrt
     torch2trt
-    triton
     tensorrt_llm
+    nvidia_modelopt
 )
 
 # --- Behavior flags -----------------------------------------------------------
 # Dry-run mode. Set by --simulate and read only by run_build/print_config.
 SIMULATE=0
+# Skip the server teardown in cleanup. Set by --keep-running.
+KEEP_RUNNING=0
 
 # --- Environment pins ---------------------------------------------------------
 ENV_FILE="${ENV_FILE:-./.env}"
@@ -70,9 +75,11 @@ usage() {
 Usage: ./build.sh [options]
 
 Options:
-  --simulate   Forward --simulate to jetson-containers: print the build
-               commands and the resolved dependency chain without building.
-  -h, --help   Show this message and exit.
+  --simulate       Forward --simulate to jetson-containers: print the build
+                   commands and the resolved dependency chain without building.
+  --keep-running   Leave the devpi/APT containers up after the build instead
+                   of tearing them down on exit.
+  -h, --help       Show this message and exit.
 EOF
 }
 
@@ -121,6 +128,9 @@ print_config() {
     if [[ "$SIMULATE" -eq 1 ]]; then
         echo "Mode:     simulate (no image is built)"
     fi
+    if [[ "$KEEP_RUNNING" -eq 1 ]]; then
+        echo "Servers:  kept running after the build"
+    fi
     echo "-----------------------------------------------------------------------------"
 }
 
@@ -148,8 +158,15 @@ cleanup() {
     local status=$?
     local run_dir
 
-    echo "==> Stopping the local servers..."
-    docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
+    # --keep-running leaves the compose project up so the wheels/tarballs stay
+    # reachable for follow-up builds; print the manual teardown instead.
+    if [[ "$KEEP_RUNNING" -eq 1 ]]; then
+        echo "==> Leaving the local servers running (--keep-running)."
+        echo "    To stop: docker compose -p devpi-local -f $DEVPI_COMPOSE_FILE down"
+    else
+        echo "==> Stopping the local servers..."
+        docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
+    fi
 
     if [[ -f "$LOG" ]]; then
         # Strip ANSI escape sequences in place ('script' captures the raw tty).
@@ -178,6 +195,10 @@ parse_args() {
         case "$1" in
             --simulate)
                 SIMULATE=1
+                shift
+                ;;
+            --keep-running)
+                KEEP_RUNNING=1
                 shift
                 ;;
             -h|--help)
