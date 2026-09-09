@@ -24,5 +24,5 @@ def piper(version: str, branch: str = None, default: bool = False) -> list:
     return pkg, builder
 
 package = [
-    piper("1.7.0", branch="main", default=True),
+    piper("1.8.0", branch="main", default=True),
 ]

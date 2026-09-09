@@ -28,5 +28,5 @@ def tensorrt_edgellm(version, branch=None, requires=None, default=False):
     return pkg, builder
 
 package = [
-    tensorrt_edgellm('0.5.0', requires='>=36', default=True),
+    tensorrt_edgellm('0.10.0', requires='>=36', default=True),
 ]

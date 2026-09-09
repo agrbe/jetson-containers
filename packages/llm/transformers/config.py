@@ -202,8 +202,8 @@ def transformers_git(version, repo='huggingface/transformers', branch=None, requ
 # anything using transformers if you want to use load_in_8bit/load_in_4bit or AutoGPTQ quantization
 # built-into transformers, use the 'bitsandbytes' or 'auto_gptq' containers directly instead of transformers container
 package = [
-    transformers_pypi('latest', default=(L4T_VERSION.major >= 36), requires='>=36'),
-    transformers_pypi('4.46.3', default=(L4T_VERSION.major < 36), requires='<36'),   # 4.46.3 is the last version that supports Python 3.8
+    transformers_pypi('5.16.1', default=True, requires='>=36'),
+    # transformers_pypi('4.46.3', default=(L4T_VERSION.major < 36), requires='<36'),   # 4.46.3 is the last version that supports Python 3.8
     # Commenting out git version to avoid version conflicts
     # transformers_git('latest', default=False, requires=None),                         # will always resolve to the latest git version from huggingface/transformers
 ]
