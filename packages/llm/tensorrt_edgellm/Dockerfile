@@ -2,7 +2,7 @@
 # name: tensorrt_edgellm
 # group: llm
 # config: config.py
-# depends: [cuda, cudastack:standard, cmake, python, numpy, pytorch, torchvision, transformers, nvidia_modelopt]
+# depends: [cuda, cudastack:standard, cmake, python, numpy, pytorch, torchvision, transformers, nvidia_modelopt, pybind11]
 # buildkit_device: nvidia.com/gpu=all
 # requires: '>=36'
 # test: test.py
@@ -14,6 +14,7 @@ FROM ${BASE_IMAGE}
 ARG TENSORRT_EDGELLM_VERSION \
     TENSORRT_EDGELLM_BRANCH \
     CUDA_ARCHITECTURES \
+    CUDA_VERSION \
     FORCE_BUILD=off \
     SOURCE_DIR=/opt/TensorRT-Edge-LLM
 

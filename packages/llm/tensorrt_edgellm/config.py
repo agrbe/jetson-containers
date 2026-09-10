@@ -12,6 +12,7 @@ def tensorrt_edgellm(version, branch=None, requires=None, default=False):
         'TENSORRT_EDGELLM_VERSION': version,
         'TENSORRT_EDGELLM_BRANCH': branch,
         'CUDA_ARCHITECTURES': ';'.join([str(x) for x in CUDA_ARCHITECTURES]),
+        'CUDA_VERSION': CUDA_VERSION,
     }
 
     if requires:
@@ -28,5 +29,5 @@ def tensorrt_edgellm(version, branch=None, requires=None, default=False):
     return pkg, builder
 
 package = [
-    tensorrt_edgellm('0.10.0', requires='>=36', default=True),
+    tensorrt_edgellm('0.10.1', requires='>=36', default=True),
 ]

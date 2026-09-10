@@ -8,6 +8,7 @@ apt-get install -y --no-install-recommends \
     build-essential \
     git
 rm -rf /var/lib/apt/lists/*
+apt-get autoremove --purge -y
 apt-get clean
 
 git clone --branch=${TENSORRT_EDGELLM_BRANCH} --depth=1 --recurse-submodules \
@@ -22,9 +23,7 @@ apt-get install -y --no-install-recommends python3-dev
 rm -rf /var/lib/apt/lists/*
 apt-get clean
 
-sed -i 's|torch~=2.9.1|torch>=2.9.1|g' requirements.txt
-sed -i 's|"torch~=2.9.1"|"torch>=2.9.1"|g' pyproject.toml
-sed -i 's|torch~=|torch>=|g' requirements.txt pyproject.toml
+sed -i -E 's|(torch)[~=]=|\1>=|g; s|(transformers)[~=]=|\1>=|g' requirements.txt pyproject.toml
 
 uv pip install .
 
@@ -33,9 +32,12 @@ tensorrt-edgellm-quantize-llm --help
 
 if [ "$FORCE_BUILD" == "on" ]; then
     echo "Forcing C++ build of TensorRT-Edge-LLM ${TENSORRT_EDGELLM_VERSION}"
-    exit 1
+    /tmp/tensorrt_edgellm/build.sh
+elif TARPACK_PREFIX=${SOURCE_DIR} tarpack install tensorrt-edgellm-${TENSORRT_EDGELLM_VERSION} \
+    && uv pip install $SOURCE_DIR; then
+    echo "TensorRT-Edge-LLM C++ ${TENSORRT_EDGELLM_VERSION} installed"
+else
+    /tmp/tensorrt_edgellm/build.sh
 fi
-
-/tmp/tensorrt_edgellm/build.sh
 
 touch /tmp/tensorrt_edgellm/.done

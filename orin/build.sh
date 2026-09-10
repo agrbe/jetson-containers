@@ -45,6 +45,7 @@ PACKAGES=(
     torch2trt
     tensorrt_llm
     nvidia_modelopt
+    tensorrt_edgellm:0.10.1
 )
 
 # --- Behavior flags -----------------------------------------------------------
