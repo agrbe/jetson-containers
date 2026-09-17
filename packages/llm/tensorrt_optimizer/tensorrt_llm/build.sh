@@ -17,13 +17,24 @@ if [[ "${TRT_LLM_BRANCH}" == *"jetson"* ]]; then
     DEV_REQUIREMENTS_FILENAME="requirements-dev-jetson.txt"
 fi
 
-
-sed -i '/^diffusers[[:space:]=<>!]/d' "${REQUIREMENTS_FILENAME}"
 sed -i 's/==/>=/g' "${REQUIREMENTS_FILENAME}"
+sed -i 's|^torch.*|torch|' "${REQUIREMENTS_FILENAME}"
+sed -i 's|^xgrammar>.*|xgrammar|' "${REQUIREMENTS_FILENAME}"
+sed -i '/^diffusers[[:space:]=<>!]/d' "${REQUIREMENTS_FILENAME}"
 sed -i 's/cuda-python.*/cuda-python/g' "${REQUIREMENTS_FILENAME}"
 sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
-sed -i 's|^torch.*|torch|' "${REQUIREMENTS_FILENAME}"
 sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
+sed -i 's|^transformers.*|transformers==5.14.1|' "${REQUIREMENTS_FILENAME}"
+
+# transformers 5.x port: official rename (HF MIGRATION_GUIDE_V5); no-op once upstream fixes it
+grep -rlE 'AutoModelForVision2Seq' ${SOURCE_DIR}/tensorrt_llm --include='*.py' | \
+  xargs -r sed -i 's/AutoModelForVision2Seq/AutoModelForImageTextToText/g'
+
+# transformers 5.x compat (jetson patch): TRT-LLM bundles model configs that
+# transformers now ships natively (e.g. exaone_moe); duplicate registration
+# raises ValueError. exist_ok=True keeps TRT-LLM's own registration winning.
+grep -rlE '(AutoConfig|AutoModel[A-Za-z]*)\.register\(' ${SOURCE_DIR}/tensorrt_llm/_torch/models --include='*.py' | \
+  xargs -r sed -i -E '/exist_ok/! s/((AutoConfig|AutoModel[A-Za-z]*)\.register\([^)]*)\)/\1, exist_ok=True)/g'
 
 uv pip install -r "${REQUIREMENTS_FILENAME}"
 uv pip install -r "${DEV_REQUIREMENTS_FILENAME}"
@@ -145,6 +156,12 @@ else
     echo "No ${CUTLASS_PYTHON_DIR} (TRT-LLM >= 1.3 fetches cutlass via CMake FetchContent); skipping"
 fi
 
+# transformers 5.x compat (jetson patch)
+cp ${TMP_DIR}/transformers_v5_compat.py ${SOURCE_DIR}/tensorrt_llm/_transformers_v5_compat.py
+grep -q "_transformers_v5_compat" ${SOURCE_DIR}/tensorrt_llm/__init__.py || \
+  sed -i '1i from . import _transformers_v5_compat  # jetson: transformers 5.x shims' \
+    ${SOURCE_DIR}/tensorrt_llm/__init__.py
+
 # Patched: --python_bindings, --benchmarks and --trt_root do not exist in build_wheel.py 1.3.x
 # (TRT-LLM 1.3 cmake does not link libnvinfer). --job_count caps parallel nvcc (1.5-4 GB each).
 python3 ${SOURCE_DIR}/scripts/build_wheel.py \
@@ -157,9 +174,11 @@ python3 ${SOURCE_DIR}/scripts/build_wheel.py \
         --job_count "${TRT_LLM_JOBS:-8}" \
         --use_ccache
 
-uv pip install $PIP_WHEEL_DIR/tensorrt_llm*.whl
+uv pip install --no-deps $PIP_WHEEL_DIR/tensorrt_llm*.whl
+uv pip show tensorrt_llm
 
-#uv pip show tensorrt_llm
-#python3 -c "import tensorrt_llm; print(tensorrt_llm.__version__)"
+# uv pip install "transformers==5.14.1"
+# python3 -c "import tensorrt_llm; print('trtllm OK')"
+# trtllm-build --help > /dev/null && echo "trtllm-build OK"
 
 twine upload --verbose $PIP_WHEEL_DIR/tensorrt_llm*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"

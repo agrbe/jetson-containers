@@ -7,6 +7,7 @@ DEBIAN_FRONTEND=noninteractive
 apt-get update
 REQUIREMENTS_FILENAME="requirements.txt"
 DEV_REQUIREMENTS_FILENAME="requirements-dev.txt"
+PYPROJECT_FILENAME="pyproject.toml"
 
 if [[ "${TRT_LLM_BRANCH}" == *"jetson"* ]]; then
     REQUIREMENTS_FILENAME="requirements-jetson.txt"
@@ -17,13 +18,14 @@ fi
 rm -rf /var/lib/apt/lists/*
 apt-get clean
 
-bash ${TMP_DIR}/install_cusparselt.sh
+# Provided by cudastack:standard, but not installed in the base image
+# bash ${TMP_DIR}/install_cusparselt.sh
 
 uv pip install polygraphy mpi4py
 
 # Patched: Install local TensorRT wheel to satisfy dependencies before requirements.txt
 # This prevents uv from trying to find tensorrt on PyPI (which fails for Tegra)
-uv pip install /usr/local/lib/python3.10/dist-packages/tensorrt-10.3.0-cp310-none-linux_aarch64.whl
+# uv pip install /usr/local/lib/python3.10/dist-packages/tensorrt-10.3.0-cp310-none-linux_aarch64.whl
 
 if [ -s ${SOURCE_TAR} ]; then
         echo "extracting TensorRT-LLM sources from ${TRT_LLM_SOURCE}"
@@ -37,13 +39,16 @@ else
 
     # Patched: Remove tensorrt from requirements to prevent PyPI fetch
     sed -i '/^tensorrt/d' "${REQUIREMENTS_FILENAME}"
-    
+
     # Existing sed commands
     sed -i 's|^torch>.*|torch|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|nvidia-cudnn.*||' "${REQUIREMENTS_FILENAME}"
+    sed -i 's|^xgrammar>.*|xgrammar|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|cuda-python.*|cuda-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
+    # keep transformers pinned: Edge-LLM 0.10.1 requires exactly 5.14.1 (also the chain-wide pin)
+    sed -i 's|^transformers.*|transformers==5.14.1|' "${REQUIREMENTS_FILENAME}" "${PYPROJECT_FILENAME}"
 
     git status
     git diff --submodule=diff
@@ -55,6 +60,7 @@ if [ "$FORCE_BUILD" == "on" ]; then
 fi
 
 uv pip install -r ${REQUIREMENTS_FILENAME}
-uv pip install tensorrt_llm==${TRT_LLM_VERSION}
+uv pip install --no-deps tensorrt_llm==${TRT_LLM_VERSION}
 
-uv pip uninstall torch && uv pip install torch==${PYTORCH_VERSION}
+# uv pip uninstall torch && uv pip install torch==${PYTORCH_VERSION}
+# uv pip install "transformers==5.14.1"

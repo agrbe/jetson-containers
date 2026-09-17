@@ -18,6 +18,7 @@ ARG TRT_LLM_VERSION \
     TRT_LLM_PATCH \
     CUDA_ARCHS \
     CUDA_VERSION \
+    PYTHON_VERSION \
     FORCE_BUILD="off" \
     BUILD_DIR="/opt/TensorRT-LLM/cpp/build" \
     SOURCE_DIR="/opt/TensorRT-LLM" \
@@ -48,20 +49,17 @@ RUN git clone --recurse-submodules --branch ${TRT_LLM_BRANCH} https://github.com
 
 COPY ${TRT_LLM_PATCH} ${GIT_PATCHES}
 COPY sources ${TMP_DIR}
+COPY patches ${TMP_DIR}
 COPY build.sh install.sh /tmp/setup/
 
 RUN /tmp/setup/install.sh || /tmp/setup/build.sh #|| echo "BUILD FAILED!"
 
-RUN uv pip install --upgrade transformers && \
-    uv pip install uvicorn fastapi
+RUN uv pip install uvicorn fastapi
 
 COPY llama.sh ${SOURCE_DIR}/
-
-# check python version and save variable PYTHON_VERSION
-RUN PYTHON_TAG=$(uv run python -c "import sys; print('{}.{}'.format(sys.version_info.major, sys.version_info.minor))") \
-    && echo "PYTHON_TAG=${PYTHON_TAG}"
-ARG PYTHON_VERSION=${PYTHON_TAG}
 
 # name '_device_get_memory_info_fn' is not defined
 COPY patches/profiler.py /usr/local/lib/python${PYTHON_VERSION}/dist-packages/tensorrt_llm/profiler.py
 COPY patches/convert_utils.py /usr/local/lib/python${PYTHON_VERSION}/dist-packages/tensorrt_llm/models/convert_utils.py
+
+WORKDIR /
