@@ -40,6 +40,9 @@ def opencv(version, requires=None, default=False, url=None):
         return cv, builder, meta
 
 package = [
+    # Jetpack 7
+    opencv('5.0.0', '>=39', default=True),
+
     # JetPack 5/6
     opencv('4.5.0', '==35.*', default=False),
     opencv('4.8.1', '>=35', default=(CUDA_VERSION <= Version('12.2'))),
