@@ -24,5 +24,6 @@ def video_codec_sdk(version, nv_codec_headers_tag, default=False):
 
 package = [
   video_codec_sdk('12.2.72', nv_codec_headers_tag='n12.2.72.0'),
-  video_codec_sdk('13.0.19', nv_codec_headers_tag='n13.0.19.0', default=True),
+  video_codec_sdk('13.0.19', nv_codec_headers_tag='n13.0.19.0'),
+  video_codec_sdk('13.1.15', nv_codec_headers_tag='n13.1.15.0', default=True),
 ]
