@@ -32,19 +32,33 @@ set -euo pipefail
 # --- Build target -------------------------------------------------------------
 IMAGE_NAME="${IMAGE_NAME:-jetson-image}"
 PACKAGES=(
-    cuda
+    # --- Core -----------------------------------------------------------------
+    cuda                      # 13.2.1
     cudastack:standard
-    onnx
+    cuda-python:13.2
+    cutlass:4.2.0
+    # --- Deps -----------------------------------------------------------------
+    bitsandbytes:0.50.2
+    ffmpeg:8.1.2
+    flash-attention:3.0.0
+    flashinfer:0.6.18
+    llvm:22
+    mooncake:0.3.13.post1
+    nixl:1.4.1
+    opencv:5.0.0
+    transformers:5.14.1
+    xformers:0.0.35
+    # --- Libs -----------------------------------------------------------------
+    onnx                      # 1.19.1
     onnxruntime:1.29.0
     pytorch:2.12
-    ffmpeg:8.1.2
     torchaudio:2.12.0
     torchvision:0.27.0
-    triton
-    torch_tensorrt
-    torch2trt
-    tensorrt_llm
-    nvidia_modelopt
+    triton:3.7.1
+    torch_tensorrt            # 2.12.0
+    torch2trt                 # 0.5.0
+    tensorrt_llm:1.2.1
+    nvidia_modelopt:0.46.1
     tensorrt_edgellm:0.10.1
 )
 
@@ -150,6 +164,7 @@ run_build() {
     # '-e' propagates the real build exit code through 'script'.
     build_cmd="jetson-containers build ${build_args[*]} ${PACKAGES[*]}"
     script -q -e -c "$build_cmd" "$LOG"
+    echo -e "\n"
 }
 
 cleanup() {
