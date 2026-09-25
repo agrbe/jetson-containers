@@ -7,3 +7,4 @@ if [ "$FORCE_BUILD" == "on" ]; then
 fi
 
 uv pip install xformers==${XFORMERS_VERSION}
+uv pip install mslk==1.2.0 --default-index https://download.pytorch.org/whl/cu132

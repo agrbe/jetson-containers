@@ -31,5 +31,6 @@ XFORMERS_MORE_DETAILS=1 \
 python3 setup.py --verbose bdist_wheel --dist-dir /opt/xformers/wheels
 
 uv pip install /opt/xformers/wheels/*.whl
+uv pip install mslk==1.2.0 --default-index https://download.pytorch.org/whl/cu132
 
 twine upload --verbose /opt/xformers/wheels/xformers*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
