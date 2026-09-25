@@ -41,6 +41,7 @@ else
     sed -i '/^tensorrt/d' "${REQUIREMENTS_FILENAME}"
 
     # Existing sed commands
+    sed -i '/^opencv/d' "${REQUIREMENTS_FILENAME}"
     sed -i 's|^torch>.*|torch|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|nvidia-cudnn.*||' "${REQUIREMENTS_FILENAME}"
     sed -i 's|^xgrammar>.*|xgrammar|' "${REQUIREMENTS_FILENAME}"
