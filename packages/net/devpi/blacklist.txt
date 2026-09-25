@@ -8,7 +8,6 @@ awq-inference-engine
 bitsandbytes
 causal-conv1d
 ctranslate2
-cuda-python
 cupy
 exllamav2
 exllamav3
