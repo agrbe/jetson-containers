@@ -36,5 +36,5 @@ package = [
     bitsandbytes('0.39.1', default=(CUDA_VERSION < Version('12.2')), repo="dusty-nv/bitsandbytes", branch="main"),
     bitsandbytes('0.45.4', default=(CUDA_VERSION < Version('12.6'))),
     bitsandbytes('0.49.3', default=(CUDA_VERSION >= Version('12.6'))),
+    bitsandbytes('0.50.2'),
 ]
-
