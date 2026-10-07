@@ -13,6 +13,11 @@
 #   BuildKit cache, the ccache mount, the images.
 # - Print every target with its size and the total to be freed, then ask for
 #   confirmation before deleting anything.
+# - Verify the BuildKit prune instead of trusting it: records BuildKit holds as
+#   in use survive 'prune -af', the prune still exits 0, and the space stays
+#   taken in /var/lib/containerd. The leftover is measured after the prune and
+#   reported; --restart-docker restarts the daemon to drop those references
+#   and prunes a second time.
 #
 # Usage:
 #   ./clean.sh                     # stop + remove containers, then uv and pip
@@ -20,8 +25,12 @@
 #   ./clean.sh --no-rm-containers  # stop them, but keep them
 #   ./clean.sh --ccache            # + the ccache mount inside BuildKit
 #   ./clean.sh --buildkit          # + the whole BuildKit cache (covers --ccache)
+#   ./clean.sh --buildkit --restart-docker
+#                                  # + restart the daemon and prune again when
+#                                  #   cache survives the prune as in use
 #   ./clean.sh --images            # + unused docker images
-#   ./clean.sh --nuke              # + every docker object: networks, volumes
+#   ./clean.sh --nuke              # + every docker object: networks, volumes;
+#                                  #   implies --restart-docker
 #   ./clean.sh --force-nuke        # --nuke without the typed NUKE prompt
 #   ./clean.sh --dry-run           # report only, never prompts, never deletes
 #   ./clean.sh --yes               # skip the [y/N] prompt, never the NUKE one
@@ -30,6 +39,16 @@
 #   build.sh runs the local devpi and APT servers as compose project
 #   'devpi-local'. The default stop and remove aborts a build in progress and
 #   makes publish.sh fail; pass --keep-running while a build is running.
+#
+#   --restart-docker runs 'systemctl restart docker' (root or sudo), and only
+#   when cache is left in use after the prune. The restart aborts any build in
+#   progress, and containers kept with --no-rm-containers that have a
+#   'restart: always' policy come back up with the daemon.
+#
+# Optional variables:
+#   BUILDKIT_LEFTOVER_MIN_BYTES  cache left after a prune below this is ignored
+#   DOCKER_READY_TIMEOUT         seconds to wait for the daemon after a restart
+#   CONTAINERD_NAMESPACE         namespace whose snapshots are counted
 # =============================================================================
 set -euo pipefail
 
@@ -43,6 +62,15 @@ PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
 # servers are stopped from under a running build.
 DEVPI_COMPOSE_PROJECT="devpi-local"
 
+# --- BuildKit verification ----------------------------------------------------
+# Cache below this size left after a full prune is treated as noise rather than
+# as records stuck in use, so the daemon is never restarted over a few kB.
+BUILDKIT_LEFTOVER_MIN_BYTES="${BUILDKIT_LEFTOVER_MIN_BYTES:-104857600}"
+# Seconds to wait for the daemon to answer again after a restart.
+DOCKER_READY_TIMEOUT="${DOCKER_READY_TIMEOUT:-60}"
+# Namespace the docker daemon keeps its snapshots in under /var/lib/containerd.
+CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-moby}"
+
 # --- Behavior flags -----------------------------------------------------------
 # STOP_RUNNING and RM_CONTAINERS are the only opt-out switches in the script:
 # they default to 1 and their flags turn them off.
@@ -53,6 +81,10 @@ CLEAN_BUILDKIT=0
 CLEAN_IMAGES=0
 NUKE=0
 FORCE_NUKE=0
+RESTART_DOCKER=0
+# Set by resolve_flags when the restart comes from --nuke rather than from its
+# own flag: a missing sudo then downgrades the run instead of aborting it.
+RESTART_IMPLIED=0
 DRY_RUN=0
 ASSUME_YES=0
 
@@ -60,6 +92,8 @@ ASSUME_YES=0
 TOTAL_BYTES=0
 # Set by resolve_flags when a wider prune already accounts for the ccache mount.
 CCACHE_SUBSUMED=0
+# Set when build cache is still held in use at the end of the run.
+BUILDKIT_STUCK=0
 # ──────────────────────────────────────────────────────────────────────────────
 
 # =============================================================================
@@ -150,6 +184,35 @@ remove_cache_dir() {
     rm -rf "$target"
 }
 
+run_root() {
+    if (( EUID == 0 )); then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+can_restart_docker() {
+    # Checked right after the confirmation, so a missing tool or a sudo password
+    # prompt shows up before anything is deleted, not halfway through the prunes.
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "systemctl not found: the docker daemon cannot be restarted."
+        return 1
+    fi
+    if (( EUID == 0 )); then
+        return 0
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "sudo not found: restarting the docker daemon needs root."
+        return 1
+    fi
+    if sudo -n true 2>/dev/null; then
+        return 0
+    fi
+    # No cached credentials: sudo has to prompt, which fails without a terminal.
+    sudo -v
+}
+
 # =============================================================================
 # Docker inspection
 # =============================================================================
@@ -174,6 +237,57 @@ cachemount_size() {
         /^Size:/{sz=$2}
         /^Type:/{if ($2 == "exec.cachemount") {print sz; found=1; exit}}
         END{if (!found) print "-"}'
+}
+
+buildkit_usage() {
+    # Prints "<reclaimable> <total>" from the summary lines of 'buildx du', with
+    # a dash for a missing figure. Total minus reclaimable is the cache BuildKit
+    # holds as in use, which no prune removes. The awk reads to the end on
+    # purpose: an early 'exit' would SIGPIPE docker and trip 'pipefail'.
+    { docker buildx du 2>/dev/null || true; } | awk '
+        $1 == "Reclaimable:" {r = $2}
+        $1 == "Total:"       {t = $2}
+        END{print (r == "" ? "-" : r), (t == "" ? "-" : t)}'
+}
+
+buildkit_inuse_bytes() {
+    local reclaimable total inuse
+
+    read -r reclaimable total < <(buildkit_usage)
+    inuse=$(( $(to_bytes "$total") - $(to_bytes "$reclaimable") ))
+    if (( inuse < 0 )); then
+        inuse=0
+    fi
+    echo "$inuse"
+}
+
+buildkit_total_bytes() {
+    local total
+
+    read -r _ total < <(buildkit_usage)
+    to_bytes "$total"
+}
+
+containerd_snapshot_count() {
+    # Counts the snapshots behind the images and the build cache, straight from
+    # containerd: the ground truth for what still occupies /var/lib/containerd.
+    # 'ctr' needs root; 'sudo -n' keeps this informational line from ever
+    # prompting, so it prints a dash when no credentials are cached.
+    local listing
+
+    if ! command -v ctr >/dev/null 2>&1; then
+        echo "-"
+        return 0
+    fi
+    if (( EUID == 0 )); then
+        listing="$(ctr -n "$CONTAINERD_NAMESPACE" snapshots ls 2>/dev/null)" \
+            || { echo "-"; return 0; }
+    else
+        listing="$(sudo -n ctr -n "$CONTAINERD_NAMESPACE" snapshots ls 2>/dev/null)" \
+            || { echo "-"; return 0; }
+    fi
+    # The first line is the column header.
+    awk 'NR > 1 && NF {n++} END{print n + 0}' <<<"$listing"
 }
 
 running_count() {
@@ -237,6 +351,24 @@ warn_devpi() {
     echo "-----------------------------------------------------------------------------"
 }
 
+note_buildkit_inuse() {
+    # The 'Build Cache' row is '.Size', which includes the records in use. Those
+    # survive the prune, so the estimate is flagged before the confirmation.
+    local inuse
+
+    inuse="$(buildkit_inuse_bytes)"
+    if (( inuse <= BUILDKIT_LEFTOVER_MIN_BYTES )); then
+        return 0
+    fi
+
+    echo "Build cache held in use by BuildKit: ~$(human "$inuse"). A prune alone skips it."
+    if (( RESTART_DOCKER )); then
+        echo "  The docker daemon is restarted to release it; this aborts a running build."
+    else
+        echo "  Add --restart-docker to restart the daemon and prune it as well."
+    fi
+}
+
 print_targets() {
     local containers_action=keep
 
@@ -264,6 +396,9 @@ print_targets() {
     fi
     if (( ! RM_CONTAINERS )); then
         echo "Containers are kept, so the image figure is an upper bound."
+    fi
+    if (( CLEAN_BUILDKIT )); then
+        note_buildkit_inuse
     fi
     if (( DRY_RUN )); then
         echo "Mode: DRY-RUN (nothing will be deleted)"
@@ -431,6 +566,94 @@ clean_buildkit() {
     # exec.cachemount is gone after this, which is why --buildkit subsumes
     # --ccache instead of running both.
     docker buildx prune -af 2>&1 | tail -1
+    verify_buildkit
+}
+
+restart_docker() {
+    local waited=0
+
+    echo "==> restarting the docker daemon"
+    if ! run_root systemctl restart docker; then
+        echo "    FAILED  could not restart docker.service"
+        return 1
+    fi
+    # systemctl returns once the unit is active, but the API socket can lag a
+    # moment behind; the next prune must not race it.
+    until docker info >/dev/null 2>&1; do
+        if (( waited >= DOCKER_READY_TIMEOUT )); then
+            echo "    FAILED  daemon not answering after ${DOCKER_READY_TIMEOUT}s"
+            return 1
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    echo "    OK"
+}
+
+verify_buildkit() {
+    # 'buildx prune -af' exits 0 and prints a total even when it removed almost
+    # nothing, so its output proves little. What is still in the store after it
+    # is the reliable signal: after a full prune, anything left is in use.
+    local leftover reclaimable total
+
+    leftover="$(buildkit_total_bytes)"
+    if (( leftover <= BUILDKIT_LEFTOVER_MIN_BYTES )); then
+        echo "    verified: $(human "$leftover") of build cache left"
+        return 0
+    fi
+
+    echo "    WARNING  $(human "$leftover") of build cache survived the prune:"
+    echo "             BuildKit holds it as in use."
+    if (( ! RESTART_DOCKER )); then
+        BUILDKIT_STUCK=1
+        return 0
+    fi
+
+    # The in-use references live in the daemon's memory, held by a running
+    # build or left behind by an interrupted one. Only a restart drops them.
+    if ! restart_docker; then
+        BUILDKIT_STUCK=1
+        return 0
+    fi
+    read -r reclaimable total < <(buildkit_usage)
+    echo "    after restart: reclaimable $reclaimable of $total"
+
+    echo "==> BuildKit build cache, second pass"
+    docker buildx prune -af 2>&1 | tail -1 || true
+    leftover="$(buildkit_total_bytes)"
+    if (( leftover > BUILDKIT_LEFTOVER_MIN_BYTES )); then
+        echo "    WARNING  $(human "$leftover") still in use after the restart"
+        BUILDKIT_STUCK=1
+        return 0
+    fi
+    echo "    verified: $(human "$leftover") of build cache left"
+}
+
+report_snapshots() {
+    local count
+
+    count="$(containerd_snapshot_count)"
+    if [[ "$count" == "-" ]]; then
+        echo "containerd snapshots ($CONTAINERD_NAMESPACE): not read, needs root. Check with:"
+        echo "  sudo ctr -n $CONTAINERD_NAMESPACE snapshots ls | wc -l"
+        return 0
+    fi
+    echo "containerd snapshots ($CONTAINERD_NAMESPACE): $count"
+}
+
+report_buildkit_stuck() {
+    if (( ! BUILDKIT_STUCK )); then
+        return 0
+    fi
+
+    echo "WARNING  build cache is still held in use by BuildKit; that space was NOT freed."
+    if (( RESTART_DOCKER )); then
+        echo "         It survived a daemon restart, so a build is most likely running."
+    else
+        echo "         Make sure no build is running, then re-run with:"
+        echo "           ./clean.sh --buildkit --restart-docker"
+    fi
+    echo "         Inspect it with: docker buildx du --verbose --filter inuse"
 }
 
 clean_images() {
@@ -450,6 +673,7 @@ clean_nuke() {
     # 'system prune --volumes' removes anonymous volumes only; named unused
     # volumes need a pass of their own.
     docker volume prune -af           2>&1 | tail -1 || true
+    verify_buildkit
 }
 
 # =============================================================================
@@ -466,6 +690,7 @@ parse_args() {
             --images)           CLEAN_IMAGES=1 ;;
             --nuke)             NUKE=1 ;;
             --force-nuke)       NUKE=1; FORCE_NUKE=1 ;;
+            --restart-docker)   RESTART_DOCKER=1 ;;
             --dry-run)          DRY_RUN=1 ;;
             --yes|-y)           ASSUME_YES=1 ;;
             -h|--help)          usage ;;
@@ -493,10 +718,26 @@ resolve_flags() {
         CLEAN_BUILDKIT=1
         CLEAN_IMAGES=1
         RM_CONTAINERS=1
+        # A total prune is expected to leave nothing behind, so it also gets
+        # the restart that releases cache stuck in use.
+        if (( ! RESTART_DOCKER )); then
+            RESTART_DOCKER=1
+            RESTART_IMPLIED=1
+        fi
     fi
     if (( CLEAN_BUILDKIT )); then
         CLEAN_CCACHE=1
         CCACHE_SUBSUMED=1
+    fi
+    if (( RESTART_DOCKER && ! STOP_RUNNING )); then
+        echo "--restart-docker cannot honour --keep-running: a daemon restart stops"
+        echo "every container."
+        exit 1
+    fi
+    if (( RESTART_DOCKER && ! CLEAN_BUILDKIT )); then
+        echo "--restart-docker only acts after a full BuildKit prune:"
+        echo "  combine it with --buildkit or --nuke."
+        exit 1
     fi
 
     # An arithmetic test as the last statement would make this function return 1
@@ -523,6 +764,17 @@ main() {
     if (( DRY_RUN )); then
         echo "DRY-RUN: no action taken."
         exit 0
+    fi
+
+    if (( RESTART_DOCKER )) && ! can_restart_docker; then
+        if (( ! RESTART_IMPLIED )); then
+            echo "--restart-docker cannot run. Nothing was deleted."
+            exit 1
+        fi
+        # --nuke predates the restart; it keeps working where the restart is
+        # not possible, and the leftover check still reports stuck cache.
+        echo "WARNING  continuing --nuke without the daemon restart."
+        RESTART_DOCKER=0
     fi
 
     # Containers pin both the image they were created from and the volumes they
@@ -555,7 +807,12 @@ main() {
     fi
 
     echo "-----------------------------------------------------------------------------"
+    # Only worth a line when a docker-side store was pruned in this run.
+    if (( CLEAN_BUILDKIT || CLEAN_IMAGES )); then
+        report_snapshots
+    fi
     echo "Free on / after: $(disk_free)"
+    report_buildkit_stuck
 }
 
 main "$@"
