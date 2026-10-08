@@ -60,6 +60,7 @@ PACKAGES=(
     tensorrt_llm:1.2.1
     nvidia_modelopt:0.46.1
     tensorrt_edgellm:0.10.1
+    vllm
 )
 
 # --- Behavior flags -----------------------------------------------------------
