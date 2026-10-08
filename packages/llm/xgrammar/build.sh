@@ -2,7 +2,7 @@
 set -ex
 
 # Install dependencies of XGrammar
-uv pip install pre-commit nanobind==2.5.0
+uv pip install pre-commit nanobind #==2.5.0
 
 # Clone the repository if it doesn't exist
 git clone --branch=v${XGRAMMAR_VERSION} --recursive --depth=1 https://github.com/mlc-ai/xgrammar /opt/xgrammar ||
