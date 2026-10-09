@@ -47,12 +47,14 @@ else
 fi
 
 uv pip install apache-tvm-ffi
-# sed -i '/nvidia-cutlass-dsl>=4\.2\.1/d' requirements.txt
 uv pip install -r requirements.txt --prerelease=allow
 cd /opt/flashinfer/
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer wheel"
 cd /opt/flashinfer/flashinfer-cubin
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer-cubin wheel"
+# gen_all_modules() calls gen_bgmv_moe_module() unconditionally, but that kernel only supports
+# SM90+, so the AOT jit-cache build aborts for Orin (sm87). Only add it when an SM90+ arch is built.
+sed -i -E 's/^( *)jit_specs\.append\(gen_bgmv_moe_module\(\)\)$/\1if any(v for k, v in sm_capabilities.items() if k.startswith(("sm9", "sm1"))):\n\1    jit_specs.append(gen_bgmv_moe_module())/' /opt/flashinfer/flashinfer/aot.py
 cd /opt/flashinfer/flashinfer-jit-cache
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer-jit-cache wheel"
 # Install AOT wheel
