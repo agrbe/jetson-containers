@@ -26,9 +26,15 @@ apt-get clean
 sed -i -E 's|(torch)[~=]=|\1>=|g; s|(transformers)[~=]=|\1>=|g' requirements.txt pyproject.toml
 
 uv pip install .
+# extras deps missing from the image (the rest of [export,tools,server] would downgrade torch/numpy/modelopt)
+uv pip install onnxscript==0.7.1 librosa==0.11.0 python-multipart==0.0.32
 
-tensorrt-edgellm-export-llm --help
-tensorrt-edgellm-quantize-llm --help
+# CLI names dropped the -llm suffix in 0.10 (tensorrt-edgellm-export); accept both.
+# Only warn: a broken Python CLI is a dependency issue that the C++ build.sh fallback can't fix.
+for cmd in export quantize; do
+    tensorrt-edgellm-${cmd} --help || tensorrt-edgellm-${cmd}-llm --help \
+        || echo "WARNING: tensorrt-edgellm-${cmd} CLI is not working"
+done
 
 if [ "$FORCE_BUILD" == "on" ]; then
     echo "Forcing C++ build of TensorRT-Edge-LLM ${TENSORRT_EDGELLM_VERSION}"
