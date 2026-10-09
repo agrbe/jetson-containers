@@ -43,11 +43,13 @@ PACKAGES=(
     flash-attention:3.0.0
     flashinfer:0.6.18
     llvm:22
+    mistral_common:1.12.0
     mooncake:0.3.13.post1
     nixl:1.4.1
     opencv:5.0.0
     transformers:5.14.1
     xformers:0.0.35
+    xgrammar:0.2.7
     # --- Libs -----------------------------------------------------------------
     onnx                      # 1.19.1
     onnxruntime:1.29.0
@@ -60,7 +62,7 @@ PACKAGES=(
     tensorrt_llm:1.2.1
     nvidia_modelopt:0.46.1
     tensorrt_edgellm:0.10.1
-    vllm
+    vllm:0.31.0
 )
 
 # --- Behavior flags -----------------------------------------------------------
