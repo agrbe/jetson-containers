@@ -42,9 +42,13 @@ else
 
     # Existing sed commands
     sed -i '/^opencv/d' "${REQUIREMENTS_FILENAME}"
-    sed -i 's|^torch>.*|torch|' "${REQUIREMENTS_FILENAME}"
+    # same relaxations as build.sh, so both paths resolve the same deps
+    # (^torch.* also unpins torchao / torch-c-dlpack-ext)
+    sed -i 's/==/>=/g' "${REQUIREMENTS_FILENAME}"
+    sed -i 's|^torch.*|torch|' "${REQUIREMENTS_FILENAME}"
+    sed -i '/^diffusers[[:space:]=<>!]/d' "${REQUIREMENTS_FILENAME}"
     sed -i 's|nvidia-cudnn.*||' "${REQUIREMENTS_FILENAME}"
-    sed -i 's|^xgrammar>.*|xgrammar|' "${REQUIREMENTS_FILENAME}"
+    sed -i 's|^xgrammar[<>=~!].*|xgrammar|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|cuda-python.*|cuda-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
