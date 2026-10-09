@@ -14,6 +14,9 @@ export USE_CUDNN=1
 export VERBOSE=1
 export CUDA_HOME=/usr/local/cuda
 export PATH="${CUDA_HOME}/bin:$PATH"
+# libtensorrt_llm.so exports its own embedded xgrammar 0.1.32 symbols; without -Bsymbolic our
+# bindings resolve part of their internal calls to that copy (GrammarMatcher fails / segfaults).
+export CMAKE_ARGS="${CMAKE_ARGS:-} -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-Bsymbolic -DCMAKE_MODULE_LINKER_FLAGS=-Wl,-Bsymbolic"
 cd /opt/xgrammar
 uv build --wheel . --out-dir /opt/xgrammar/wheels/ --verbose
 
