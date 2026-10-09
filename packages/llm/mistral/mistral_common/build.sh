@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -ex
 
-uv pip install pre-commit nanobind==2.5.0
+uv pip install pre-commit nanobind #==2.5.0
 # Clone the repository if it doesn't exist
 git clone --branch=${MISTRAL_COMMON_BRANCH} --recursive --depth=1 https://github.com/mistralai/mistral-common /opt/mistral_common ||
 git clone --recursive --depth=1 https://github.com/mistralai/mistral-common /opt/mistral_common
