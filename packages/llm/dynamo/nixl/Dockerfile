@@ -15,7 +15,9 @@ FROM ${BASE_IMAGE}
 ARG NIXL_VERSION \
     NIXL_VERSION_SPEC \
     IS_TEGRA \
-    IS_SBSA
+    IS_SBSA \
+    UCX_TAG \
+    FORCE_BUILD=off
 
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \

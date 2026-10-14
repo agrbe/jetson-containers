@@ -112,7 +112,7 @@ ucx_info -d | egrep -i 'cuda_(copy|ipc)|gdr' || true
 # -------------------------- Build NIXL (meson) -----------------------
 pushd "${NIXL_PREFIX}"
 # toolchain deps
-${PYTHON_BIN} -m pip install -U tomlkit meson ninja pybind11 patchelf auditwheel
+uv pip install --python "${PYTHON_BIN}" tomlkit meson ninja pybind11 patchelf auditwheel
 
 # Check CUDA version and rename wheel if CUDA 13
 if [ -x "${CUDA_HOME}/bin/nvcc" ]; then
@@ -190,11 +190,11 @@ else
 fi
 
 # Install locally (optional)
-${PYTHON_BIN} -m pip install -U "${WHEEL_PATH}"
+uv pip install --python "${PYTHON_BIN}" --upgrade "${WHEEL_PATH}"
 
 # Optional: upload
 if [[ -n "${TWINE_REPOSITORY_URL}" ]]; then
-  ${PYTHON_BIN} -m pip install -U twine
+  uv pip install --python "${PYTHON_BIN}" --upgrade twine
   twine upload --verbose "${WHEEL_PATH}" || echo "⚠️  Failed to upload wheel to ${TWINE_REPOSITORY_URL}"
 fi
 
