@@ -31,7 +31,7 @@ else
 fi
 echo "Using NVSHMEM package: $NVSHMEM_PKG"
 
-python3 -m pip install --no-cache-dir build setuptools wheel ninja mpi4py nvidia-ml-py einops $NVSHMEM_PKG requests tqdm
+uv pip install --no-cache build setuptools wheel ninja mpi4py nvidia-ml-py einops $NVSHMEM_PKG requests tqdm
 
 export CUDA_HOME=/usr/local/cuda
 export LD_LIBRARY_PATH=${CUDA_HOME}/lib64/stubs:${LD_LIBRARY_PATH}
@@ -46,7 +46,6 @@ else
   export FLASHINFER_CUDA_ARCH_LIST="8.7 9.0a 10.0a 10.3a 11.0f 12.0f"
 fi
 
-uv pip install apache-tvm-ffi
 uv pip install -r requirements.txt --prerelease=allow
 cd /opt/flashinfer/
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer wheel"
@@ -58,6 +57,6 @@ sed -i -E 's/^( *)jit_specs\.append\(gen_bgmv_moe_module\(\)\)$/\1if any(v for k
 cd /opt/flashinfer/flashinfer-jit-cache
 uv build --no-build-isolation -v --wheel . --out-dir /opt/wheels/ || echo "failed to build flashinfer-jit-cache wheel"
 # Install AOT wheel
-python3 -m pip install /opt/wheels/flashinfer*.whl
+uv pip install /opt/wheels/flashinfer*.whl
 
 twine upload --verbose /opt/wheels/flashinfer*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"

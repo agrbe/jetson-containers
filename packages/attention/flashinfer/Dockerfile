@@ -2,7 +2,7 @@
 # name: flashinfer
 # group: attention
 # config: config.py
-# depends: [cuda, cudastack:standard, pytorch, triton, cuda-python, cudnn_frontend, llvm:22]
+# depends: [cuda, cudastack:standard, pytorch, triton, cuda-python, cudnn_frontend, apache-tvm-ffi, llvm:22]
 # buildkit_device: nvidia.com/gpu=all
 # requires: '>=35'
 # test: test.py
