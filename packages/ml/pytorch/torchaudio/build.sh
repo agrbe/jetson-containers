@@ -13,6 +13,9 @@ apt-get install -y --no-install-recommends \
 rm -rf /var/lib/apt/lists/*
 apt-get clean
 
+# release branch of the same series for the fallback clone (2.11.0 -> release/2.11)
+BRANCH_VERSION=$(echo "$TORCHAUDIO_VERSION" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+
 # --- Clone torchaudio repository (try versioned tags first, fallback to release branch, then master) ---
 git clone --branch=v${TORCHAUDIO_VERSION} --recursive --depth=1 https://github.com/pytorch/audio /opt/torchaudio \
   || git clone --branch=release/${BRANCH_VERSION} --recursive --depth=1 https://github.com/pytorch/audio /opt/torchaudio \
