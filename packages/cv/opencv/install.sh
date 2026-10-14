@@ -19,10 +19,7 @@ else
     export OPENCV_DEB="OpenCV-${OPENCV_VERSION}.tar.gz"
     export OPENCV_URL=${TAR_INDEX_URL}/${OPENCV_DEB}
     $ROOT/install_deb.sh
-    # Older builds exported ENABLE_ROLLING unconditionally and published the wheel as
-    # opencv-contrib-python-rolling (versioned 5.1.0.<date>), so accept either name.
-    uv pip install "opencv-contrib-python~=${OPENCV_VERSION}" || \
-    uv pip install "opencv-contrib-python-rolling>=${OPENCV_VERSION}"
+    uv pip install "opencv-contrib-python~=${OPENCV_VERSION}"
 fi
 
 # In buildkit=1 mode, we cannot test the installation here
