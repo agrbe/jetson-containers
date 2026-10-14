@@ -27,5 +27,5 @@ def flash_attn(version, requires=None, default=False):
     return pkg, builder
 
 package = [
-    flash_attn('3.0.0', default=(CUDA_VERSION >= Version('12.6'))), # Flash-Attention 4 for Jetson Thor
+    flash_attn('2.8.3.post2', default=(CUDA_VERSION >= Version('12.6'))), # Flash-Attention 4 for Jetson Thor
 ]
