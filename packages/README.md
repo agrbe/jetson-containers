@@ -304,8 +304,8 @@ Machine learning frameworks, PyTorch ecosystem, numeric libraries, and RAPIDS.
 
 | Package | Path |
 |---------|------|
+| `apache-tvm-ffi` | [`ml/apache/apache-tvm-ffi`](/packages/ml/apache/apache-tvm-ffi) |
 | `tvm` | [`ml/apache/tvm`](/packages/ml/apache/tvm) |
-| `tvm-ffi` | [`ml/apache/tvm-ffi`](/packages/ml/apache/tvm-ffi) |
 
 ### ml (other)
 
