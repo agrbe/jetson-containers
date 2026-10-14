@@ -2,7 +2,7 @@
 # name: mamba
 # group: mamba
 # config: config.py
-# depends: [transformers, causalconv1d, triton]
+# depends: [transformers, causalconv1d, triton, apache-tvm-ffi]
 # buildkit_device: nvidia.com/gpu=all
 # requires: '>=34.1.0'
 # test: test.py
