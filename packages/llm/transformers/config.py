@@ -163,6 +163,10 @@ def transformers_pypi(version, default=False, requires=None) -> list:
                 log_verbose(f"Using latest version from PyPI: {version}")
 
     pkg['name'] = f'transformers:{version}'
+    pkg['build_args'] = {
+        'TRANSFORMERS_PACKAGE': f'transformers=={version}',
+        'TRANSFORMERS_VERSION': version,
+    }
 
     if default:
         pkg['alias'] = 'transformers'
