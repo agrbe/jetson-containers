@@ -29,5 +29,7 @@ def cudnn_frontend(version, version_spec=None, requires=None, default=False):
 
 
 package = [
-    cudnn_frontend('1.22.1', '1.22.1', default=(CUDA_VERSION >= Version('12.6'))),
+    # flashinfer 0.6.18 requires nvidia-cudnn-frontend>=1.25.0
+    cudnn_frontend('1.31.0', '1.31.0', default=(CUDA_VERSION >= Version('12.6'))),
+    cudnn_frontend('1.22.1', '1.22.1'),
 ]

@@ -2,7 +2,7 @@
 # name: cudnn_frontend
 # group: cuda
 # config: config.py
-# depends: [cuda, cudastack:standard, python, cmake, ninja, cuda-python]
+# depends: [cuda, cudastack:standard, python, cmake, ninja, cuda-python, apache-tvm-ffi]
 # buildkit_device: nvidia.com/gpu=all
 # requires: '>=35'
 # test: test.py
