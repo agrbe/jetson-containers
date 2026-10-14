@@ -52,16 +52,6 @@ RUN if [ "${FORCE_BUILD}" = "on" ]; then \
     fi
 
 
-# Pre-clone PyTorch repository to cache it
-RUN if [ "${FORCE_BUILD}" = "on" ]; then \
-        echo "Pre-cloning PyTorch repository..." && \
-        rm -rf /opt/pytorch-cache && \
-        git clone --depth=1 --recursive https://github.com/pytorch/pytorch /opt/pytorch-cache && \
-        echo "PyTorch repository cached successfully"; \
-    else \
-        echo "Skipping PyTorch repository cloning (FORCE_BUILD=${FORCE_BUILD})"; \
-    fi
-
 COPY requirements.txt requirements-build.txt /tmp/
 
 # Conditional requirements installation
