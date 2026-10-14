@@ -2,7 +2,7 @@
 # name: xgrammar
 # group: llm
 # config: config.py
-# depends: [cmake, ninja, pytorch, torchvision, torchaudio, transformers]
+# depends: [cmake, ninja, pytorch, torchvision, torchaudio, transformers, apache-tvm-ffi]
 # buildkit_device: nvidia.com/gpu=all
 # requires: '>=34.1.0'
 # test: test.py
