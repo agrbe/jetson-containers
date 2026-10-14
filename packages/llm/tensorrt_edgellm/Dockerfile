@@ -18,8 +18,6 @@ ARG TENSORRT_EDGELLM_VERSION \
     FORCE_BUILD=off \
     SOURCE_DIR=/opt/TensorRT-Edge-LLM
 
-ADD https://api.github.com/repos/NVIDIA/TensorRT-Edge-LLM/git/refs/heads/main /tmp/tensorrt_edgellm_version.json
-
 COPY install.sh build.sh /tmp/tensorrt_edgellm/
 
 RUN /tmp/tensorrt_edgellm/install.sh || /tmp/tensorrt_edgellm/build.sh
