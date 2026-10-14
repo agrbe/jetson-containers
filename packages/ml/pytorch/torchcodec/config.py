@@ -3,7 +3,7 @@ from packaging.version import Version
 from packages.ml.pytorch.version import PYTORCH_VERSION
 
 
-def torchcodec(version, pytorch=None, depends=None, requires=None):
+def torchcodec(version, pytorch=None, depends=None, requires=None, default=True):
     pkg = package.copy()
 
     if pytorch:
@@ -33,7 +33,7 @@ def torchcodec(version, pytorch=None, depends=None, requires=None):
     builder['name'] = builder['name'] + '-builder'
     builder['build_args'] = {**builder['build_args'], 'FORCE_BUILD': 'on'}
 
-    if pytorch == PYTORCH_VERSION:
+    if pytorch == PYTORCH_VERSION and default:
         pkg['alias'] = 'torchcodec'
         builder['alias'] = 'torchcodec:builder'
 
@@ -45,6 +45,8 @@ package = [
     torchcodec('0.9.1', pytorch='2.9.1', depends=['ffmpeg:8.1.2'], requires='>=36'),
     torchcodec('0.10.0', pytorch='2.10', depends=['ffmpeg:8.1.2'], requires='>=36'),
     torchcodec('0.11.0', pytorch='2.11', depends=['ffmpeg:8.1.2'], requires='>=36'),
-    torchcodec('0.12.0', pytorch='2.12', depends=['ffmpeg:8.1.2'], requires='>=36'),
+    torchcodec('0.12.0', pytorch='2.12', depends=['ffmpeg:8.1.2'], requires='>=36', default=False),
     torchcodec('0.13.0', pytorch='2.13', depends=['ffmpeg:8.1.2'], requires='>=36'),
+    # vllm 0.31 requires torchcodec>=0.14
+    torchcodec('0.17.0', pytorch='2.12', depends=['ffmpeg:8.1.2'], requires='>=36'),
 ]

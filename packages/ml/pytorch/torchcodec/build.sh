@@ -14,6 +14,9 @@ apt-get install -y --no-install-recommends \
 rm -rf /var/lib/apt/lists/*
 apt-get clean
 
+# release branch of the same series for the fallback clone (2.11.0 -> release/2.11)
+BRANCH_VERSION=$(echo "$TORCHCODEC_VERSION" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+
 # --- Clone torchcodec repository (try versioned tags first, then RC, release branch, then master) ---
 git clone --branch=v${TORCHCODEC_VERSION} --recursive --depth=1 https://github.com/pytorch/torchcodec /opt/torchcodec \
   || git clone --branch=v${TORCHCODEC_VERSION}-rc1 --recursive --depth=1 https://github.com/pytorch/torchcodec /opt/torchcodec \
