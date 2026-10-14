@@ -432,8 +432,9 @@ def resolve_dependencies(packages, check=True, skip_packages=[]):
                 if dependency_index < 0:  # dependency not in list, add it before the package
                     packages.insert(package_index, dependency)
                 elif dependency_index > package_index:  # dependency after current package, move it to before
-                    packages.pop(dependency_index)
-                    packages.insert(package_index, dependency)
+                    # move the entry itself, keeping its tag (cutlass:4.2.0)
+                    moved = packages.pop(dependency_index)
+                    packages.insert(package_index, moved)
                     return packages, True
         packages = [p for p in packages if not any(fnmatch.fnmatch(p, skip) for skip in skip_packages)]
         return packages, (packages != packages_org)
@@ -457,6 +458,29 @@ def resolve_dependencies(packages, check=True, skip_packages=[]):
     if check:
         for package in packages:
             find_package(package)
+
+        # two variants of one package (e.g. ffmpeg:8.1 and ffmpeg:8.1.2)
+        # would be built as two stages, the later silently overwriting
+        # the earlier one: refuse instead
+        variants = {}
+        for package in packages:
+            name = find_package(package)['name']
+            base = variants.setdefault(name.split(':')[0], {})
+            base.setdefault(name, package)
+        conflicts = [v for v in variants.values() if len(v) > 1]
+        if conflicts:
+            lines = []
+            for names in conflicts:
+                for name, entry in names.items():
+                    wanted_by = [
+                        p for p in packages
+                        if entry in find_package(p).get('depends', [])
+                    ]
+                    by = ', '.join(wanted_by) or 'the package list'
+                    lines.append(f"  {name} (requested by {by})")
+            raise ValueError(
+                "conflicting variants of the same package in the build "
+                "chain:\n" + '\n'.join(lines))
 
     return packages
 
