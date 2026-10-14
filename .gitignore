@@ -23,8 +23,10 @@ audio.wav
 benchmark.csv
 
 # Compiled artifacts: the binaries stay out of git, the manifest is tracked
-dist/wheel/
-dist/tarball/
+dist/
 
 # Local devpi/APT server state (published wheels and tarballs)
 packages/net/devpi/cache/
+
+# Compiled docker images
+images/
