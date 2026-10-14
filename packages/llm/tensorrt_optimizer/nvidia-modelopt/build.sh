@@ -2,7 +2,8 @@
 set -ex
 
 # Clone the repository if it doesn't exist
-git clone --branch=v${MAMBA_VERSION} --depth=1 --recursive https://github.com/NVIDIA/TensorRT-Model-Optimizer /opt/nvidia_modelopt || \
+# upstream tags have no 'v' prefix (e.g. 0.46.1); build the same version install.sh installs
+git clone --branch=${NVIDIA_MODELOPT_VERSION} --depth=1 --recursive https://github.com/NVIDIA/TensorRT-Model-Optimizer /opt/nvidia_modelopt || \
 git clone --depth=1 --recursive https://github.com/NVIDIA/TensorRT-Model-Optimizer /opt/nvidia_modelopt
 
 cd /opt/nvidia_modelopt
