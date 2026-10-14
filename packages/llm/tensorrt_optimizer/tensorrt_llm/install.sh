@@ -52,8 +52,8 @@ else
     sed -i 's|cuda-python.*|cuda-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
     sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
-    # keep transformers pinned: Edge-LLM 0.10.1 requires exactly 5.14.1 (also the chain-wide pin)
-    sed -i 's|^transformers.*|transformers==5.14.1|' "${REQUIREMENTS_FILENAME}" "${PYPROJECT_FILENAME}"
+    # keep transformers at the chain-wide pin (ENV TRANSFORMERS_VERSION from the transformers package)
+    sed -i "s|^transformers.*|transformers${TRANSFORMERS_VERSION:+==${TRANSFORMERS_VERSION}}|" "${REQUIREMENTS_FILENAME}" "${PYPROJECT_FILENAME}"
 
     git status
     git diff --submodule=diff
@@ -64,7 +64,7 @@ if [ "$FORCE_BUILD" == "on" ]; then
         exit 1
 fi
 
-uv pip install -r ${REQUIREMENTS_FILENAME}
+/tmp/setup/install_missing.sh "${REQUIREMENTS_FILENAME}"
 uv pip install --no-deps tensorrt_llm==${TRT_LLM_VERSION}
 
 # uv pip uninstall torch && uv pip install torch==${PYTORCH_VERSION}

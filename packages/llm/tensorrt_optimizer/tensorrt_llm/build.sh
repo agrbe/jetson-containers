@@ -24,7 +24,7 @@ sed -i '/^diffusers[[:space:]=<>!]/d' "${REQUIREMENTS_FILENAME}"
 sed -i 's/cuda-python.*/cuda-python/g' "${REQUIREMENTS_FILENAME}"
 sed -i 's|flashinfer-python.*|flashinfer-python|' "${REQUIREMENTS_FILENAME}"
 sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
-sed -i 's|^transformers.*|transformers==5.14.1|' "${REQUIREMENTS_FILENAME}"
+sed -i "s|^transformers.*|transformers${TRANSFORMERS_VERSION:+==${TRANSFORMERS_VERSION}}|" "${REQUIREMENTS_FILENAME}"
 
 # transformers 5.x port: official rename (HF MIGRATION_GUIDE_V5); no-op once upstream fixes it
 grep -rlE 'AutoModelForVision2Seq' ${SOURCE_DIR}/tensorrt_llm --include='*.py' | \
@@ -36,7 +36,7 @@ grep -rlE 'AutoModelForVision2Seq' ${SOURCE_DIR}/tensorrt_llm --include='*.py' |
 grep -rlE '(AutoConfig|AutoModel[A-Za-z]*)\.register\(' ${SOURCE_DIR}/tensorrt_llm/_torch/models --include='*.py' | \
   xargs -r sed -i -E '/exist_ok/! s/((AutoConfig|AutoModel[A-Za-z]*)\.register\([^)]*)\)/\1, exist_ok=True)/g'
 
-uv pip install -r "${REQUIREMENTS_FILENAME}"
+/tmp/setup/install_missing.sh "${REQUIREMENTS_FILENAME}"
 uv pip install -r "${DEV_REQUIREMENTS_FILENAME}"
 
 # TensorRT python bindings for this interpreter, without depending on earlier stages:

@@ -50,16 +50,12 @@ RUN git clone --recurse-submodules --branch ${TRT_LLM_BRANCH} https://github.com
 COPY ${TRT_LLM_PATCH} ${GIT_PATCHES}
 COPY sources ${TMP_DIR}
 COPY patches ${TMP_DIR}
-COPY build.sh install.sh /tmp/setup/
+COPY build.sh install.sh install_missing.sh /tmp/setup/
 
 RUN /tmp/setup/install.sh || /tmp/setup/build.sh #|| echo "BUILD FAILED!"
 
 RUN uv pip install uvicorn fastapi
 
 COPY llama.sh ${SOURCE_DIR}/
-
-# name '_device_get_memory_info_fn' is not defined
-COPY patches/profiler.py /usr/local/lib/python${PYTHON_VERSION}/dist-packages/tensorrt_llm/profiler.py
-COPY patches/convert_utils.py /usr/local/lib/python${PYTHON_VERSION}/dist-packages/tensorrt_llm/models/convert_utils.py
 
 WORKDIR /
