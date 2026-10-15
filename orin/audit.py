@@ -9,13 +9,16 @@ git checkouts under /opt, then reports:
   - distributions whose version changed more than once along the chain
   - every version change per stage (downgrades marked)
   - git provenance of the final image and 'uv pip check' conflicts
+  - blacklisted (locally built) distributions of the final image that are not
+    uploaded to the devpi index the build used (the image's PIP_INDEX_URL)
 
 Usage:
   ./audit.py [--log-dir logs/<run>] [--image IMAGE ...] --build-sh BUILD_SH
                 [--pins pins.txt] [--all-changes]
 
 Without --image, the stage images are read from the --tag of logs/<run>/build/*.sh
-(default: the newest run). Exits 1 when a pin is not met by the final image.
+(default: the newest run). Exits 1 when a pin is not met by the final image
+or a locally built distribution is not on devpi (devpi must be running).
 """
 
 import argparse
@@ -23,6 +26,8 @@ import json
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -56,7 +61,8 @@ try:
     overrides = open(os.environ.get("UV_OVERRIDE") or "/etc/uv/overrides.txt").read().split()
 except OSError:
     overrides = []
-print(json.dumps({"dists": dists, "repos": repos, "overrides": overrides}))
+print(json.dumps({"dists": dists, "repos": repos, "overrides": overrides,
+                  "index": os.environ.get("PIP_INDEX_URL", "")}))
 '''
 
 
@@ -95,6 +101,19 @@ def probe(image):
         return image, json.loads(r.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         return image, None
+
+
+def devpi_uploads(index, dist):
+    """Versions of dist uploaded to the devpi index (PyPI mirror files excluded)."""
+    req = urllib.request.Request(f"{index}/{dist}", headers={'Accept': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            versions = json.load(r)['result']
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return set()
+        raise
+    return {v for v, info in versions.items() if info.get('+links')}
 
 
 def short(image):
@@ -233,6 +252,24 @@ def main():
         for d, o, n in sorted(rows):
             down = '  DOWNGRADE' if vkey(n) < vkey(o) else ''
             print(f"  [{name}] {d}: {o} -> {n}{down}")
+
+    # blacklisted dists are never mirrored from PyPI: their wheel must be our upload
+    index = stages[-1][1].get('index', '').rstrip('/').removesuffix('/+simple')
+    blacklist = P.ROOT / 'packages' / 'net' / 'devpi' / 'blacklist.txt'
+    local = {P.norm(n) for n in blacklist.read_text().split() if not n.startswith('#')}
+    print(f"\n== local builds uploaded to devpi ({index or 'no PIP_INDEX_URL in the image'})")
+    for dist in sorted(local & set(final)):
+        got = final[dist][0]
+        try:
+            uploaded = devpi_uploads(index, dist)
+        except (OSError, ValueError) as e:
+            print(f"  devpi not reachable ({e}); start it with launch_pypi.sh")
+            failed.append('devpi')
+            break
+        status = 'ok' if got in uploaded else 'MISSING'
+        print(f"  {status:7s} {dist:28s} installed {got:24s} on devpi {', '.join(sorted(uploaded)) or '-'}")
+        if status == 'MISSING':
+            failed.append(dist)
 
     print(f"\n== provenance in the final image ({final_name})")
     for dist, (ver, origin) in sorted(final.items()):
