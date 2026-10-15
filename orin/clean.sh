@@ -38,7 +38,7 @@
 # Warning:
 #   build.sh runs the local devpi and APT servers as compose project
 #   'devpi-local'. The default stop and remove aborts a build in progress and
-#   makes publish.sh fail; pass --keep-running while a build is running.
+#   makes download.sh fail; pass --keep-running while a build is running.
 #
 #   --restart-docker runs 'systemctl restart docker' (root or sudo), and only
 #   when cache is left in use after the prune. The restart aborts any build in
@@ -299,7 +299,7 @@ running_count() {
 
 devpi_is_running() {
     # build.sh starts devpi and the APT server as compose project 'devpi-local',
-    # and publish.sh refuses to run without them. '--filter' exits 0 with empty
+    # and download.sh refuses to run without them. '--filter' exits 0 with empty
     # output when nothing matches, so the substitution is safe under 'set -e'.
     local ids
 
@@ -345,7 +345,7 @@ warn_devpi() {
     fi
 
     echo "WARNING  the local package servers (${DEVPI_COMPOSE_PROJECT}) are running."
-    echo "         Stopping them aborts a build.sh in progress and breaks publish.sh."
+    echo "         Stopping them aborts a build.sh in progress and breaks download.sh."
     echo "         Restart them with ./launch_pypi.sh, or re-run with --keep-running."
     echo "         Their data lives on bind mounts, so no prune here drops the index."
     echo "-----------------------------------------------------------------------------"
