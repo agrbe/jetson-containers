@@ -446,9 +446,20 @@ def check_clone(
             )
         return
     if ref in ('main', 'master', 'HEAD'):
-        report.add(
-            'WARN', stage, f"git clone {url} uses the moving branch {ref}", where
-        )
+        # a <X>_REF/_TAG build arg paired with <X>_SHA: the script checks the commit
+        var = re.search(r'(?:--branch[= ]|-b\s+)["\']?\$\{?([A-Za-z_]\w*?)_(?:REF|TAG)\b', seg)
+        sha = values.get(f"{var.group(1)}_SHA") if var else None
+        if sha:
+            report.add(
+                'INFO',
+                stage,
+                f"git clone {url} uses the branch {ref}, verified against {var.group(1)}_SHA={sha[:12]}",
+                where,
+            )
+        else:
+            report.add(
+                'WARN', stage, f"git clone {url} uses the moving branch {ref}", where
+            )
     if '$' in ref:
         computed, undefined = unresolved(ref, values)
         if undefined:
