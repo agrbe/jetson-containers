@@ -1,4 +1,5 @@
 from jetson_containers import IS_SBSA, update_dependencies, cuda_short_version
+from packages.cuda.cutlass.version import CUTLASS_DSL_VERSION
 
 
 def vllm(version, branch=None, requires=None, default=False, depends=None):
@@ -18,7 +19,8 @@ def vllm(version, branch=None, requires=None, default=False, depends=None):
         'VLLM_VERSION': version,
         'VLLM_BRANCH': branch,
         'IS_SBSA': IS_SBSA,
-        'CUDA_SUFFIX': cuda_short_version()
+        'CUDA_SUFFIX': cuda_short_version(),
+        'CUTLASS_DSL_VERSION': CUTLASS_DSL_VERSION,
     }
 
     builder = pkg.copy()

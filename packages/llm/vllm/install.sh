@@ -19,10 +19,7 @@ if [ "$FORCE_BUILD" == "on" ]; then
 	exit 1
 fi
 
-uv pip install \
-	compressed-tensors \
-	xgrammar \
-	vllm==${VLLM_VERSION}+${CUDA_SUFFIX}
+uv pip install vllm==${VLLM_VERSION}+${CUDA_SUFFIX}
 
 # File "/opt/venv/lib/python3.12/site-packages/gguf/gguf_reader.py"
 # `newbyteorder` was removed from the ndarray class in NumPy 2.0

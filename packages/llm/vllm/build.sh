@@ -16,14 +16,15 @@ sed -i \
   -e 's|^gguf.*|gguf|g' \
   -e 's|^opencv-python-headless.*||g' \
   -e 's|^mistral_common.*|mistral_common|g' \
-  -e 's|^compressed-tensors.*||g' \
-  -e 's|^xgrammar.*||g' \
+  -e 's|^xgrammar.*|xgrammar|g' \
   requirements/common.txt
 
 sed -i -E 's|^setuptools([<>=!~ ;].*)?$|setuptools|' requirements/common.txt
 
 # Loosen flashinfer requirement to allow latest version.
 sed -E -i 's/^(flashinfer-(python|cubin))==.*$/\1/' requirements/cuda.txt
+# Same CuTe DSL as tensorrt_edgellm (vllm only needs it for FA4 on sm100)
+sed -E -i "s/^(nvidia-cutlass-dsl(\[cu13\])?)==.*$/\1==${CUTLASS_DSL_VERSION}/" requirements/cuda.txt
 
 # grep gguf requirements/common.txt
 
@@ -62,9 +63,6 @@ fi
 
 uv build --wheel --no-build-isolation -v --out-dir /opt/vllm/wheels .
 uv pip install /opt/vllm/wheels/vllm*.whl
-
-cd /opt/vllm
-uv pip install compressed-tensors
 
 # Optionally upload to a repository using Twine
 twine upload --verbose /opt/vllm/wheels/vllm*.whl || echo "Failed to upload wheel to ${TWINE_REPOSITORY_URL}"
