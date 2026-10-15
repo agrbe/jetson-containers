@@ -20,7 +20,7 @@ if [ "$FORCE_BUILD" == "on" ]; then
 fi
 
 uv pip install \
-	compressed-tensors \
+	compressed-tensors==${COMPRESSED_TENSORS_VERSION} \
 	xgrammar==${XGRAMMAR_VERSION}
 
 # File "/opt/venv/lib/python3.12/site-packages/gguf/gguf_reader.py"

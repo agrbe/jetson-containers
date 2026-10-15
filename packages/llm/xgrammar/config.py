@@ -1,7 +1,7 @@
 from jetson_containers import CUDA_VERSION, IS_SBSA
 from packaging.version import Version
 
-def xgrammar(version, branch=None, requires=None, default=False):
+def xgrammar(version, compressed_tensors, branch=None, requires=None, default=False):
     pkg = package.copy()
 
     if requires:
@@ -14,6 +14,7 @@ def xgrammar(version, branch=None, requires=None, default=False):
 
     pkg['build_args'] = {
         'XGRAMMAR_VERSION': version,
+        'COMPRESSED_TENSORS_VERSION': compressed_tensors,
         'IS_SBSA': IS_SBSA
     }
 
@@ -30,6 +31,7 @@ def xgrammar(version, branch=None, requires=None, default=False):
 
 package = [
     # 0.6.5 compatible with jetson https://github.com/xgrammar-project/xgrammar/pull/9735
-    xgrammar(version='0.2.0', default=False),
-    xgrammar(version='0.2.7', default=True),
+    # compressed_tensors: not an xgrammar dependency; the version vllm pins, installed once here
+    xgrammar(version='0.2.0', compressed_tensors='0.17.0', default=False),
+    xgrammar(version='0.2.7', compressed_tensors='0.17.0', default=True),
 ]

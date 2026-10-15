@@ -23,7 +23,7 @@ uv build --wheel . --out-dir /opt/xgrammar/wheels/ --verbose
 # Install the wheel
 # Warning: version number is 0.1.5 even if actual version is 0.1.8, or 0.1.9 due to version.py not being adapted yet: https://github.com/mlc-ai/xgrammar/blob/main/python/xgrammar/version.py
 uv pip install /opt/xgrammar/wheels/xgrammar*.whl
-uv pip install compressed-tensors
+uv pip install compressed-tensors==${COMPRESSED_TENSORS_VERSION}
 
 # Optionally upload to a repository using Twine
 twine upload --verbose /opt/xgrammar/wheels/xgrammar*.whl || echo "Failed to upload wheel to ${TWINE_REPOSITORY_URL}"
