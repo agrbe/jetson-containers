@@ -173,6 +173,12 @@ run_build() {
         build_args+=(--simulate)
     fi
 
+    # buildx attaches a provenance attestation (with build time and invocation)
+    # to every --load'ed image, so each stage gets a new digest even when all
+    # its steps are CACHED, and the next stage's FROM misses the layer cache.
+    # Without attestations the digest is stable and stages are reused.
+    export BUILDX_NO_DEFAULT_ATTESTATIONS=1
+
     # 'script' allocates a PTY so the builder still renders colors and tty
     # progress on screen, while everything is captured raw into $LOG.
     # '-e' propagates the real build exit code through 'script'.
