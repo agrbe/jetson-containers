@@ -22,8 +22,10 @@ def video_codec_sdk(version, nv_codec_headers_tag, default=False):
   return pkg
 
 
+# Minimum driver per nv-codec-headers README: n12.2 >= 550.54.14, n13.0 >= 570,
+# n13.1 >= 610. JetPack 7.2 ships driver 595, so 13.0 is the newest that works.
 package = [
   video_codec_sdk('12.2.72', nv_codec_headers_tag='n12.2.72.0'),
-  video_codec_sdk('13.0.19', nv_codec_headers_tag='n13.0.19.0'),
-  video_codec_sdk('13.1.15', nv_codec_headers_tag='n13.1.15.0', default=True),
+  video_codec_sdk('13.0.19', nv_codec_headers_tag='n13.0.19.1', default=True),
+  video_codec_sdk('13.1.15', nv_codec_headers_tag='n13.1.15.0'),
 ]
