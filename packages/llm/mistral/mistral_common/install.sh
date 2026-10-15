@@ -19,7 +19,4 @@ if [ "$FORCE_BUILD" == "on" ]; then
 	exit 1
 fi
 
-uv pip install --extra-index-url https://pypi.org/simple/ \
-	compressed-tensors \
-	xgrammar \
-	mistral_common==${MISTRAL_COMMON_VERSION}
+uv pip install mistral_common==${MISTRAL_COMMON_VERSION}
