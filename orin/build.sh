@@ -22,9 +22,9 @@
 #   -h, --help       Show usage and exit.
 #
 # Optional variables:
-#   ENV_FILE=./.env             -> pin file sourced before the build
+#   ENV_FILE=$JC_REPO/.env      -> pin file sourced before the build
 #   IMAGE_NAME=jetson-models    -> value passed to --name
-#   JC_REPO=~/jetson-containers -> repo whose logs/<run>/ receives the final log
+#   JC_REPO=$(jetson-containers root) -> repo whose logs/<run>/ receives the final log
 # =============================================================================
 set -euo pipefail
 
@@ -40,7 +40,7 @@ PACKAGES=(
     llvm:22
     pybind11:3.0.2
     # --- ONNX -----------------------------------------------------------------
-    onnx                      # 1.19.1
+    onnx                      # 1.22.0
     onnxruntime:1.29.0
     # --- Multimedia / CV (system libs, no torch) ------------------------------
     ffmpeg:8.1.2
@@ -82,12 +82,14 @@ SIMULATE=0
 # Skip the server teardown in cleanup. Set by --keep-running.
 KEEP_RUNNING=0
 
-# --- Environment pins ---------------------------------------------------------
-ENV_FILE="${ENV_FILE:-./.env}"
-
 # --- Local package servers ----------------------------------------------------
-JC_REPO="${JC_REPO:-$HOME/Repositories/jetson-containers}"
+# 'jetson-containers root' prints the checkout the CLI runs from.
+JC_REPO="${JC_REPO:-$(jetson-containers root)}"
 DEVPI_COMPOSE_FILE="${JC_REPO}/packages/net/devpi/compose.yml"
+
+# --- Environment pins ---------------------------------------------------------
+# launch_pypi.sh writes the server URLs into the repo's .env, whatever the cwd.
+ENV_FILE="${ENV_FILE:-${JC_REPO}/.env}"
 
 # --- Logging ------------------------------------------------------------------
 # The log is written locally first, then moved into the per-run directory that
