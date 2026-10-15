@@ -9,6 +9,9 @@ apt-get install -y --no-install-recommends \
     pkg-config \
     libffi-dev \
     libsndfile1 \
+    libjpeg-dev \
+    libpng-dev \
+    libwebp-dev \
     python${PYTHON_VERSION}-dev
 
 rm -rf /var/lib/apt/lists/*
@@ -74,9 +77,14 @@ echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
 pkg-config --variable pc_path pkg-config | tr ':' '\n'
 pkg-config --debug libavcodec |& sed -n '1,160p' | grep -E "Searching|Looking|Trying|Located|open" || true
 
+# >=0.17 builds with scikit-build-core (no setup.py); BUILD_VERSION pins the version (no +<sha>)
+uv pip install scikit-build-core
+
+# AVIF links an S3 libavif that is not bundled in the wheel, HEIC needs libheif: disable both
 BUILD_VERSION=${TORCHCODEC_VERSION} \
-BUILD_SOX=1 \
-python3 setup.py bdist_wheel --verbose --dist-dir /opt
+TORCHCODEC_BUILD_AVIF=0 \
+TORCHCODEC_BUILD_HEIC=0 \
+uv build --wheel --no-build-isolation --verbose --out-dir /opt .
 
 cd ../
 rm -rf /opt/torchcodec
