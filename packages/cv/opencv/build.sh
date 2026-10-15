@@ -27,7 +27,8 @@ git checkout --recurse-submodules ${OPENCV_VERSION} || git checkout --recurse-su
 cd ../
 
 # apply patches to setup.py
-git apply $TMP/patches.diff || echo "failed to apply git patches"
+# required: keeps find_version.py from appending +<sha> to the wheel version
+git apply $TMP/patches.diff
 git diff
 
 # OpenCV looks for the cuDNN version in cudnn_version.h, but it's been renamed to cudnn_version_v8.h
