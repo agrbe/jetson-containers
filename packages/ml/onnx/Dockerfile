@@ -10,10 +10,11 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-ARG ONNX_VERSION
+ARG ONNX_VERSION \
+    ONNX_REF
 
-RUN uv pip install onnx || \
-    uv pip install git+https://github.com/onnx/onnx@${ONNX_VERSION} && \
+RUN uv pip install onnx==${ONNX_VERSION} || \
+    uv pip install git+https://github.com/onnx/onnx@${ONNX_REF} && \
     uv pip show onnx && \
     python3 -c 'import onnx; print(onnx.__version__)'
 
