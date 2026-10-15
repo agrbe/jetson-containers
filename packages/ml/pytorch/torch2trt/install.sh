@@ -15,6 +15,7 @@
 # Optional variables:
 #   TORCH2TRT_REPO_URL=https://github.com/NVIDIA-AI-IOT/torch2trt
 #   TORCH2TRT_REF=            -> branch/tag; empty = default branch
+#   TORCH2TRT_SHA=            -> commit TORCH2TRT_REF must resolve to; empty = not checked
 #   SOURCE_DIR=/opt/torch2trt -> kept after install (test.py imports from the package)
 #   CUDA_ARCHITECTURES=87     -> from the cuda base image ENV; CMake plugin targets
 #   TRT_PATCH_DIR=/tmp/torch2trt -> jetson-containers patches (flattener.py)
@@ -25,6 +26,7 @@ set -euo pipefail
 # --- Source checkout information --------------------------------------------
 TORCH2TRT_REPO_URL="${TORCH2TRT_REPO_URL:-https://github.com/NVIDIA-AI-IOT/torch2trt}"
 TORCH2TRT_REF="${TORCH2TRT_REF:-}"
+TORCH2TRT_SHA="${TORCH2TRT_SHA:-}"
 SOURCE_DIR="${SOURCE_DIR:-/opt/torch2trt}"
 TRT_PATCH_DIR="${TRT_PATCH_DIR:-/tmp/torch2trt}"
 
@@ -68,6 +70,7 @@ print_config() {
     echo "════════════════════════════════════════════════════════════════════════════"
     echo "  TORCH2TRT_REPO_URL : $TORCH2TRT_REPO_URL"
     echo "  TORCH2TRT_REF      : ${TORCH2TRT_REF:-<default branch>}"
+    echo "  TORCH2TRT_SHA      : ${TORCH2TRT_SHA:-<not checked>}"
     echo "  SOURCE_DIR         : $SOURCE_DIR"
     echo "  PY_TAG             : $PY_TAG"
     echo "  TRT_INC_DIR        : $TRT_INC_DIR"
@@ -197,6 +200,9 @@ prepare_checkout() {
 
     rm -rf "$SOURCE_DIR"
     git clone "${clone_args[@]}" "$TORCH2TRT_REPO_URL" "$SOURCE_DIR"
+    if [ -n "$TORCH2TRT_SHA" ]; then
+        [ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$TORCH2TRT_SHA" ] || { echo "torch2trt ${TORCH2TRT_REF} is at $(git -C "$SOURCE_DIR" rev-parse HEAD), expected $TORCH2TRT_SHA" >&2; exit 1; }
+    fi
 
     # jetson-containers patch: flattener.py replaces the upstream module.
     cp "$TRT_PATCH_DIR/flattener.py" "$SOURCE_DIR/torch2trt/"

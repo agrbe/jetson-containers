@@ -9,7 +9,8 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-ARG TORCH2TRT_REF
+ARG TORCH2TRT_REF \
+    TORCH2TRT_SHA
 
 COPY install.sh patches/ /tmp/torch2trt/
 RUN bash /tmp/torch2trt/install.sh
