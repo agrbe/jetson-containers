@@ -32,36 +32,47 @@ set -euo pipefail
 # --- Build target -------------------------------------------------------------
 IMAGE_NAME="${IMAGE_NAME:-jetson-image}"
 PACKAGES=(
-    # --- Core -----------------------------------------------------------------
+    # --- Core: CUDA stack -----------------------------------------------------
     cuda                      # 13.2.1
     cudastack:standard
     cuda-python:13.2
-    cutlass:4.2.0
-    # --- Deps -----------------------------------------------------------------
-    bitsandbytes:0.50.2
-    ffmpeg:8.1.2
-    flash-attention:3.0.0
-    flashinfer:0.6.18
+    # --- Toolchains -----------------------------------------------------------
     llvm:22
-    mistral_common:1.12.0
-    mooncake:0.3.13.post1
-    nixl:1.4.1
-    opencv:5.0.0
-    transformers:5.14.1
-    xformers:0.0.35
-    xgrammar:0.2.7
-    # --- Libs -----------------------------------------------------------------
+    pybind11:3.0.2
+    # --- ONNX -----------------------------------------------------------------
     onnx                      # 1.19.1
     onnxruntime:1.29.0
+    # --- Multimedia / CV (system libs, no torch) ------------------------------
+    ffmpeg:8.1.2
+    opencv:5.0.0
+    # --- PyTorch ecosystem ----------------------------------------------------
     pytorch:2.12
-    torchaudio:2.12.0
     torchvision:0.27.0
+    torchcodec                # 0.17.0
+    torchaudio:2.11.0
     triton:3.7.1
+    torchao:0.18.0
+    # --- Hugging Face ---------------------------------------------------------
+    transformers:5.14.1
+    # --- Kernels: CUTLASS, attention, quantization ----------------------------
+    cutlass:4.2.0
+    flash-attention:2.8.3.post2
+    flashinfer:0.6.18
+    xformers:0.0.35
+    bitsandbytes:0.50.2
+    # --- Structured output / tokenizers ---------------------------------------
+    xgrammar:0.2.7
+    mistral_common:1.12.0
+    # --- KV-cache transfer ----------------------------------------------------
+    mooncake:0.3.13.post1
+    nixl:1.4.1
+    # --- TensorRT -------------------------------------------------------------
     torch_tensorrt            # 2.12.0
     torch2trt                 # 0.5.0
     tensorrt_llm:1.2.1
-    nvidia_modelopt:0.46.1
+    nvidia_modelopt:0.47.0
     tensorrt_edgellm:0.10.1
+    # --- LLM serving ----------------------------------------------------------
     vllm:0.31.0
 )
 
