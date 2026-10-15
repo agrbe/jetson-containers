@@ -15,5 +15,5 @@ if [ "$FORCE_BUILD" == "on" ]; then
 	exit 1
 fi
 
-uv pip install "mooncake-transfer-engine~=${MOONCAKE_VERSION}" || \
-uv pip install "mooncake-transfer-engine~=${MOONCAKE_VERSION_SPEC}"
+uv pip install "mooncake-transfer-engine==${MOONCAKE_VERSION}" || \
+uv pip install "mooncake-transfer-engine==${MOONCAKE_VERSION_SPEC}"
