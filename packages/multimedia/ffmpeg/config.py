@@ -18,7 +18,11 @@ def ffmpeg(source, version=None, requires=None, default=False, alias=[]):
   if source == 'git':
     if not version:
       raise ValueError('ffmpeg version is required to build from git sources')
-    pkg['build_args'] = {'FFMPEG_VERSION': version}
+    pkg['build_args'] = {
+      'FFMPEG_VERSION': version,
+      'AOM_REF': 'v3.15.2',
+      'AOM_SHA': 'af3dc9aadc793c1b00edc003e3fc19a44fdeb574',
+    }
     pkg['depends'] = pkg['depends'] + ['cmake', 'video-codec-sdk']
     tag = version
   else:

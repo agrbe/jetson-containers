@@ -50,8 +50,7 @@ elif [ "$FFMPEG_INSTALL" == "git" ]; then
   rm -rf /var/lib/apt/lists/*
 
   tarpack install "ffmpeg-$FFMPEG_VERSION" || \
-  $TMP/build.sh || \
-  echo "FAILED to build FFMPEG $FFMPEG_VERSION"
+  $TMP/build.sh
   ldconfig
 else
   echo "FFMPEG_INSTALL should be set to 'apt', 'git', or 'jetpack'  (was $FFMPEG_INSTALL)"

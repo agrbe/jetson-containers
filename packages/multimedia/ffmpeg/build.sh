@@ -29,7 +29,10 @@ apt-get update && apt-get install -y --no-install-recommends \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # libaom for AV1
-git clone https://aomedia.googlesource.com/aom
+git clone --branch "${AOM_REF}" --depth 1 https://aomedia.googlesource.com/aom
+if [ -n "${AOM_SHA:-}" ]; then
+  [ "$(git -C aom rev-parse HEAD)" = "$AOM_SHA" ] || { echo "aom ${AOM_REF} is at $(git -C aom rev-parse HEAD), expected $AOM_SHA" >&2; exit 1; }
+fi
 mkdir aom/builder
 cd aom/builder
 
@@ -72,9 +75,7 @@ export PKG_CONFIG_PATH="$DIST/lib/pkgconfig:$PKG_CONFIG_PATH"
 pkg-config --modversion aom
 pkg-config --modversion SvtAv1Enc
 
-# nv-codec-headers
-git clone https://github.com/FFmpeg/nv-codec-headers.git
-cd nv-codec-headers && make PREFIX="$DIST" install
+# nv-codec-headers (ffnvcodec) come from the video-codec-sdk dependency in /usr/local
 
 export PATH=/usr/local/cuda/bin:${PATH}
 NVCCFLAGS="\

@@ -12,6 +12,8 @@ FROM ${BASE_IMAGE}
 
 ARG FFMPEG_INSTALL \
     FFMPEG_VERSION \
+    AOM_REF \
+    AOM_SHA \
 		TMP=/tmp/ffmpeg
 
 COPY build.sh install.sh $TMP/
