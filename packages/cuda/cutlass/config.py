@@ -1,5 +1,6 @@
 from jetson_containers import CUDA_VERSION
 from packaging.version import Version
+from packages.cuda.cutlass.version import CUTLASS_DSL_VERSION
 
 def cutlass(version, version_spec=None, requires=None, default=False):
     pkg = package.copy()
@@ -11,6 +12,7 @@ def cutlass(version, version_spec=None, requires=None, default=False):
 
     pkg['build_args'] = {
         'CUTLASS_VERSION': version,
+        'CUTLASS_DSL_VERSION': CUTLASS_DSL_VERSION,
     }
 
     builder = pkg.copy()

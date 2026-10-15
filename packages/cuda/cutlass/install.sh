@@ -10,4 +10,4 @@ uv pip install --no-cache-dir nvidia-cutlass==${CUTLASS_VERSION} pycute --prerel
 
 # if #PYTHON_VERSION == "3.12" then install the DSL version
 echo "Installing nvidia-cutlass-dsl for Python 3.12"
-uv pip install nvidia-cutlass-dsl --prerelease=allow || echo "failed to install nvidia-cutlass-dsl for Python ${PYTHON_VERSION}"
+uv pip install "nvidia-cutlass-dsl[cu13]==${CUTLASS_DSL_VERSION}"
