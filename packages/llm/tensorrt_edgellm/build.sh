@@ -17,7 +17,7 @@ if [ ! -d "${TRT_PACKAGE_DIR}/include" ] || [ ! -d "${TRT_PACKAGE_DIR}/lib" ]; t
 fi
 
 # CuTe DSL Kernel Build
-uv pip install "nvidia-cutlass-dsl[cu13]==4.7.0" cupy-cuda13x==13.6.0
+uv pip install "nvidia-cutlass-dsl[cu13]==${CUTLASS_DSL_VERSION}" cupy-cuda13x==13.6.0
 echo "Building CuTe DSL..."
 python kernelSrcs/build_cutedsl.py --gpu_arch sm_87 --cuda-version ${CUDA_VERSION}
 
