@@ -23,14 +23,14 @@
 #
 # Optional variables:
 #   ENV_FILE=$JC_REPO/.env      -> pin file sourced before the build
-#   IMAGE_NAME=jetson-models    -> value passed to --name
+#   IMAGE_NAME=bedrock          -> value passed to --name
 #   JC_REPO=$(jetson-containers root) -> repo whose logs/<run>/ receives the final log
 # =============================================================================
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 # --- Build target -------------------------------------------------------------
-IMAGE_NAME="${IMAGE_NAME:-jetson-image}"
+IMAGE_NAME="${IMAGE_NAME:-bedrock}"
 PACKAGES=(
     # --- Core: CUDA stack -----------------------------------------------------
     cuda                      # 13.2.1
