@@ -37,7 +37,11 @@ grep -rlE '(AutoConfig|AutoModel[A-Za-z]*)\.register\(' ${SOURCE_DIR}/tensorrt_l
   xargs -r sed -i -E '/exist_ok/! s/((AutoConfig|AutoModel[A-Za-z]*)\.register\([^)]*)\)/\1, exist_ok=True)/g'
 
 /tmp/setup/install_missing.sh "${REQUIREMENTS_FILENAME}"
-uv pip install -r "${DEV_REQUIREMENTS_FILENAME}"
+# Dev requirements: '-r requirements.txt' is handled above (installing it again
+# downgrades numpy to <2, onnx, nccl...); aiperf pins numpy~=1.26/matplotlib~=3.9
+# and lm_eval pins datasets<4. Both are benchmark/eval tools, not build deps.
+sed -i -E '/^-r |^aiperf|^lm_eval/d' "${DEV_REQUIREMENTS_FILENAME}"
+/tmp/setup/install_missing.sh "${DEV_REQUIREMENTS_FILENAME}"
 
 # TensorRT python bindings for this interpreter, without depending on earlier stages:
 # 1) already importable -> keep; 2) tarball wheel left by cudastack -> install (no libs);
