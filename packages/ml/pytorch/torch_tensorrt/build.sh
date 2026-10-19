@@ -14,10 +14,11 @@ echo "TORCH_PATH=${TORCH_PATH}  RELEASE=${RELEASE:-0}  BUILD_VERSION=${BUILD_VER
 
 uv pip install pyyaml
 
-cd /tmp
-git clone --branch=${TORCH_TRT_VERSION} --depth=1 https://github.com/pytorch/TensorRT torch_tensorrt || \
-git clone --depth=1 https://github.com/pytorch/TensorRT torch_tensorrt
-cd /tmp/torch_tensorrt
+# not /tmp/torch_tensorrt: the Dockerfile copies these scripts there
+SRC=/opt/torch_tensorrt_src
+git clone --branch=${TORCH_TRT_VERSION} --depth=1 https://github.com/pytorch/TensorRT $SRC || \
+git clone --depth=1 https://github.com/pytorch/TensorRT $SRC
+cd $SRC
 
 # CUDA: /usr/local/cuda-13.0 -> /usr/local/cuda
 grep -rl 'cuda-13\.0' --include='MODULE.bazel' --include='WORKSPACE*' --include='*.bzl' . | \
@@ -39,7 +40,7 @@ sed -n '/^def get_sbsa_requirements/,/^def get_x86_64_requirements/p' setup.py
 python3 setup.py bdist_wheel
 cp dist/torch_tensorrt*.whl /opt
 cd /
-rm -rf /tmp/torch_tensorrt /root/.cache/bazel
+rm -rf $SRC /root/.cache/bazel
 
 # install + verify the local wheel, and only upload it if that passes
 WHEEL="$(ls /opt/torch_tensorrt*.whl | head -1)"
