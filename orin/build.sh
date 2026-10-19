@@ -140,11 +140,30 @@ load_env() {
     set +a
 }
 
+servers_up() {
+    # Both URLs come from the .env block a previous launch_pypi.sh wrote; the
+    # servers count as up only when both answer.
+    local devpi_url apt_url
+
+    [[ -f "$ENV_FILE" ]] || return 1
+    devpi_url="$(sed -n 's/^DEVPI_URL=//p' "$ENV_FILE" | tail -n1)"
+    apt_url="$(sed -n 's/^LOCAL_TAR_INDEX_URL=//p' "$ENV_FILE" | tail -n1)"
+    [[ -n "$devpi_url" && -n "$apt_url" ]] || return 1
+
+    curl -sf -o /dev/null --max-time 5 "${devpi_url}/+api" &&
+        curl -sf -o /dev/null --max-time 5 "${apt_url}/"
+}
+
 start_servers() {
     # launch_pypi.sh starts devpi + APT and only returns once both answered.
     # It also rewrites .env with the resolved URLs and upload credentials, so
-    # .env has to be sourced after it, not before.
-    "${JC_REPO}/launch_pypi.sh"
+    # .env has to be sourced after it, not before. Skipping it when both
+    # servers already answer avoids rebuilding their images on every run.
+    if servers_up; then
+        echo "==> Local servers already running; skipping launch_pypi.sh."
+    else
+        "${JC_REPO}/launch_pypi.sh"
+    fi
     load_env
 }
 
@@ -167,7 +186,12 @@ print_config() {
 
 run_build() {
     local build_cmd
-    local build_args=(--buildkit-progress=plain "--name=${IMAGE_NAME}")
+    # Base image: Ubuntu 24.04 (noble), pinned to a dated snapshot. 'ubuntu:24.04'
+    # moves to each new Canonical rebuild, and a new base digest invalidates the
+    # cache of every stage. Bump the date to take a newer 24.04 (rebuilds all).
+    local build_args=(--buildkit-progress=plain
+                      --base=ubuntu:noble-20260917
+                      "--name=${IMAGE_NAME}")
 
     # --simulate makes jetson-containers resolve the dependency chain and print
     # the docker commands without running them.
@@ -200,7 +224,7 @@ cleanup() {
     # reachable for follow-up builds; print the manual teardown instead.
     if [[ "$KEEP_RUNNING" -eq 1 ]]; then
         echo "==> Leaving the local servers running (--keep-running)."
-        echo "    To stop: docker compose -p devpi-local -f $DEVPI_COMPOSE_FILE down"
+        echo "    To stop: ${JC_REPO}/stop_pypi.sh"
     else
         echo "==> Stopping the local servers..."
         docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
@@ -264,6 +288,7 @@ require_command jetson-containers
 require_command script
 require_command sed
 require_command docker
+require_command curl
 
 # -----------------------------------------------------------------------------
 # Build execution
