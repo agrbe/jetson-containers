@@ -16,6 +16,9 @@ git status
 
 sed -i '/torch/d' pyproject.toml
 sed -i '/triton/d' pyproject.toml
+# keep tilelang/apache-tvm-ffi as deps but drop the version pins (tilelang==0.1.8,
+# apache-tvm-ffi<=0.1.9): they downgrade the tvm-ffi that xgrammar/cudnn-frontend need
+sed -i -E 's/"(tilelang|apache-tvm-ffi)[=<>!~][^"]*"/"\1"/' pyproject.toml
 
 MAX_JOBS="$(nproc)" \
 MAMBA_FORCE_BUILD="TRUE" \
