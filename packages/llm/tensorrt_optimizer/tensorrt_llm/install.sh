@@ -54,6 +54,8 @@ else
     sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
     # keep transformers at the chain-wide pin (ENV TRANSFORMERS_VERSION from the transformers package)
     sed -i "s|^transformers.*|transformers${TRANSFORMERS_VERSION:+==${TRANSFORMERS_VERSION}}|" "${REQUIREMENTS_FILENAME}" "${PYPROJECT_FILENAME}"
+    # nvidia-modelopt: drop the ~=0.37 pin; the nvidia_modelopt stage that follows installs its version
+    sed -i -E 's/^(nvidia-modelopt(\[[^]]*\])?)[=<>!~].*/\1/' "${REQUIREMENTS_FILENAME}"
 
     git status
     git diff --submodule=diff
