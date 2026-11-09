@@ -12,7 +12,7 @@
 # - Store an ANSI-free copy of the log for grep/diagnosis.
 #
 # Usage:
-#   ./build.sh [--simulate] [--keep-running]
+#   ./build.sh [--simulate] [--keep-running] [-- <jetson-containers build args>]
 #
 # Options:
 #   --simulate       Forward --simulate to jetson-containers: print the build
@@ -20,6 +20,8 @@
 #   --keep-running   Leave the devpi/APT containers up after the build instead
 #                    of tearing them down on exit.
 #   -h, --help       Show usage and exit.
+#   --               Pass everything after it to 'jetson-containers build'
+#                    unchanged, e.g. '-- --skip-tests=intermediate'.
 #
 # Optional variables:
 #   ENV_FILE=$JC_REPO/.env      -> pin file sourced before the build
@@ -81,6 +83,8 @@ PACKAGES=(
 SIMULATE=0
 # Skip the server teardown in cleanup. Set by --keep-running.
 KEEP_RUNNING=0
+# Extra 'jetson-containers build' arguments given after '--'.
+PASSTHROUGH=()
 
 # --- Local package servers ----------------------------------------------------
 # 'jetson-containers root' prints the checkout the CLI runs from.
@@ -111,6 +115,8 @@ Options:
   --keep-running   Leave the devpi/APT containers up after the build instead
                    of tearing them down on exit.
   -h, --help       Show this message and exit.
+  --               Pass everything after it to 'jetson-containers build'
+                   unchanged, e.g. '-- --skip-tests=intermediate'.
 EOF
 }
 
@@ -181,6 +187,9 @@ print_config() {
     if [[ "$KEEP_RUNNING" -eq 1 ]]; then
         echo "Servers:  kept running after the build"
     fi
+    if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
+        echo "Extra:    ${PASSTHROUGH[*]}"
+    fi
     echo "-----------------------------------------------------------------------------"
 }
 
@@ -208,7 +217,12 @@ run_build() {
     # 'script' allocates a PTY so the builder still renders colors and tty
     # progress on screen, while everything is captured raw into $LOG.
     # '-e' propagates the real build exit code through 'script'.
-    build_cmd="jetson-containers build ${build_args[*]} ${PACKAGES[*]}"
+    # printf %q keeps passthrough arguments intact through 'script -c'.
+    build_cmd="jetson-containers build ${build_args[*]}"
+    if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
+        build_cmd+=" $(printf '%q ' "${PASSTHROUGH[@]}")"
+    fi
+    build_cmd+=" ${PACKAGES[*]}"
     script -q -e -c "$build_cmd" "$LOG"
     echo -e "\n"
 }
@@ -266,6 +280,11 @@ parse_args() {
             -h|--help)
                 usage
                 exit 0
+                ;;
+            --)
+                shift
+                PASSTHROUGH=("$@")
+                break
                 ;;
             *)
                 echo "Unknown option: $1"
