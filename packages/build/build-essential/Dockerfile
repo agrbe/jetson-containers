@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANGUAGE=en_US:en \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
-    WGET_FLAGS="--quiet --show-progress --progress=bar:force:noscroll --no-check-certificate --timeout=60 --tries=3 --retry-connrefused --retry-on-host-error --retry-on-http-error=500,502,503,504" \
+    WGET_FLAGS="--quiet --show-progress --progress=bar:force:noscroll --timeout=60 --tries=3 --retry-connrefused --retry-on-host-error --retry-on-http-error=500,502,503,504" \
     CCACHE_DIR=/root/.cache/ccache \
     CCACHE_MAXSIZE=20G \
     CCACHE_COMPRESS=1 \

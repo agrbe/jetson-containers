@@ -67,7 +67,7 @@ else
 
     # 1) Install the local repo .deb
     DEB=cusparselt-local-repo-${DISTRO}-${CUSPARSELT_VERSION}_${CUSPARSELT_VERSION}-1_arm64.deb
-    wget --quiet --show-progress --progress=bar:force:noscroll --no-check-certificate \
+    wget --quiet --show-progress --progress=bar:force:noscroll \
       -O "${DEB}" "https://developer.download.nvidia.com/compute/cusparselt/${CUSPARSELT_VERSION}/local_installers/${DEB}"
     dpkg -i "${DEB}"
 
@@ -152,7 +152,7 @@ else
     cd "$WORK"
 
     echo "Downloading $ARCHIVE ..."
-    wget --quiet --show-progress --progress=bar:force:noscroll --no-check-certificate \
+    wget --quiet --show-progress --progress=bar:force:noscroll \
       -O "$ARCHIVE" "${BASE_URL}/${ARCHIVE}"
 
     echo "Extracting $ARCHIVE ..."
