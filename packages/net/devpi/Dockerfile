@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install devpi-server \
+# pip>=26.2.2 / certifi>=2026.10.19: drop the compromised eMudhra emSign roots (2026-10)
+RUN pip3 install -U "pip>=26.2.2" "certifi>=2026.10.19" && \
+    pip3 install devpi-server \
         devpi-client \
         devpi-web \
         devpi-constrained \
