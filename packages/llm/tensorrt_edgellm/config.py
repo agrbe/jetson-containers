@@ -1,6 +1,3 @@
-from jetson_containers import CUDA_VERSION, CUDA_ARCHITECTURES
-from packages.cuda.cutlass.version import CUTLASS_DSL_VERSION
-
 def tensorrt_edgellm(version, branch=None, requires=None, default=False):
     pkg = package.copy()
 
@@ -12,10 +9,9 @@ def tensorrt_edgellm(version, branch=None, requires=None, default=False):
     pkg['build_args'] = {
         'TENSORRT_EDGELLM_VERSION': version,
         'TENSORRT_EDGELLM_BRANCH': branch,
-        'CUDA_ARCHITECTURES': ';'.join([str(x) for x in CUDA_ARCHITECTURES]),
-        'CUDA_VERSION': CUDA_VERSION,
-        'CUTLASS_DSL_VERSION': CUTLASS_DSL_VERSION,
     }
+
+    pkg['test'] = f'test.py {version}'
 
     if requires:
         pkg['requires'] = requires

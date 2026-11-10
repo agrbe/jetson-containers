@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -ex
 
-echo "Building TensorRT-Edge-LLM C++ runtime ${TENSORRT_EDGELLM_VERSION}"
+echo "Building TensorRT-Edge-LLM ${TENSORRT_EDGELLM_VERSION} wheel"
 
 cd ${SOURCE_DIR}
 
@@ -16,51 +16,40 @@ if [ ! -d "${TRT_PACKAGE_DIR}/include" ] || [ ! -d "${TRT_PACKAGE_DIR}/lib" ]; t
     fi
 fi
 
-# CuTe DSL Kernel Build
-uv pip install "nvidia-cutlass-dsl[cu13]==${CUTLASS_DSL_VERSION}" cupy-cuda13x==13.6.0
-echo "Building CuTe DSL..."
-python kernelSrcs/build_cutedsl.py --gpu_arch sm_87 --cuda-version ${CUDA_VERSION}
+# Upstream wheel flow (packaging/README.md, "Build for the current target").
+# The pinned packaging toolchain goes in its own venv so the image keeps its cmake/wheel/build.
+WHEEL_VENV=/tmp/tensorrt_edgellm/venv
+uv venv --clear ${WHEEL_VENV}
+uv pip install --python ${WHEEL_VENV} -r packaging/wheel-toolchain-requirements.txt
 
-# Python frontend
-PYBIND="$(python -m pybind11 --cmakedir)"
+# The base image's LDFLAGS carries -Wl,-rpath,/usr/local/cuda/lib64; the payload audit only
+# accepts $ORIGIN rpaths (CUDA/TensorRT resolve through ldconfig at runtime).
+export LDFLAGS=$(echo ${LDFLAGS} | sed 's/-Wl,-rpath,[^ ]*//g')
 
-CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release
-            -DTRT_PACKAGE_DIR=${TRT_PACKAGE_DIR}
-            -DCUDA_CTK_VERSION=${CUDA_VERSION}
-            -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}
-            -DBUILD_PYTHON_BINDINGS=ON
-            -Dpybind11_DIR=${PYBIND}
-            -DEMBEDDED_TARGET=jetson-orin
-            -DENABLE_CUTE_DSL=ALL
-            -DCUDA_DRIVER_LIB=/usr/local/cuda/lib64/stubs/libcuda.so"
+# --local selects the packaging/variants.toml row of this device (jetson-orin-jp72-cu13-sm87),
+# extracts the checksum-verified CuTe DSL tarball shipped in kernelSrcs/cuteDSLPrebuilt,
+# builds the pybind runtime + TensorRT plugin, audits them, and assembles a wheel
+# with tensorrt_edgellm/_native/variants.json + payload (build tag 1subset<hash>).
+PATH=${WHEEL_VENV}/bin:${PATH} python packaging/wheel_cli.py build-wheel \
+    --local \
+    --trt-package-dir ${TRT_PACKAGE_DIR} \
+    --output-dir dist/wheel
 
-ARCH=$(uname -m)
-# if [ "$ARCH" = "aarch64" ]; then
-#     if [ -f cmake/aarch64_linux_toolchain.cmake ]; then
-#         CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64_linux_toolchain.cmake"
-#     fi
-# fi
+# The C++ examples (llm_build, llm_inference, ...) are not in the wheel:
+# build the remaining targets of the same CMake tree and keep the old build/ layout.
+BUILD_TREE=$(echo build/wheel/*)
+PATH=${WHEEL_VENV}/bin:${PATH} cmake --build ${BUILD_TREE} --parallel $(nproc)
+ln -sfn ${BUILD_TREE#build/}/examples build/examples
+ln -sfn ${BUILD_TREE#build/}/libNvInfer_edgellm_plugin.so build/libNvInfer_edgellm_plugin.so
 
-mkdir -p build
-cd build
+mkdir -p ${PIP_WHEEL_DIR}
+cp dist/wheel/tensorrt_edgellm-*.whl ${PIP_WHEEL_DIR}/
+uv pip install --reinstall-package tensorrt-edgellm dist/wheel/tensorrt_edgellm-*.whl
 
-cmake .. ${CMAKE_ARGS}
-make -j$(nproc)
-
-cmake --install . --prefix ${SOURCE_DIR}/dist 2>&1 | tail -5 || {
-    mkdir -p ${SOURCE_DIR}/bin
-    cp examples/llm/{llm_build,llm_inference,llm_stream,llm_bench} ${SOURCE_DIR}/bin/
-    cp examples/multimodal/{audio_build,visual_build,action_build,action_inference} ${SOURCE_DIR}/bin/ 2>/dev/null || true
-}
-
-uv build --wheel --out-dir $PIP_WHEEL_DIR ${SOURCE_DIR}
-uv pip install ${SOURCE_DIR}
-
-twine upload --verbose $PIP_WHEEL_DIR/tensorrt_edgellm-*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
+twine upload --verbose dist/wheel/tensorrt_edgellm-*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
 tarpack upload tensorrt-edgellm-${TENSORRT_EDGELLM_VERSION} ${SOURCE_DIR} || echo "failed to upload tarball"
 
-echo "TensorRT-Edge-LLM C++ build complete"
-ls -la examples/llm/ 2>/dev/null || true
-ls -la examples/multimodal/ 2>/dev/null || true
+echo "TensorRT-Edge-LLM build complete"
+ls -la build/examples/llm/ build/examples/multimodal/
 
 touch /tmp/tensorrt_edgellm/.done
