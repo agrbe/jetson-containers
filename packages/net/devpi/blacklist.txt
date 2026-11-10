@@ -28,6 +28,7 @@ minference
 mlc-chat
 mlc-llm
 mooncake-transfer-engine
+mslk
 onnxruntime-gpu
 open3d
 opencv-contrib-python
