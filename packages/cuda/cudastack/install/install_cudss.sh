@@ -19,17 +19,24 @@ wget $WGET_FLAGS \
 dpkg -i cuda-keyring.deb
 apt-get update
 
-# Find exact apt version matching CUDSS_VERSION and pin to it
-CUDSS_APT_VER=$(apt-cache madison cudss 2>/dev/null \
-    | awk -v ver="${CUDSS_VERSION}" '$3 ~ ver {gsub(/^ +| +$/, "", $3); print $3; exit}')
+# Pin the whole CUDA-major chain to CUDSS_VERSION. The 'cudss' meta package only
+# requires '>=' versions of its dependencies, so pinning it alone pulls the newest
+# release (1.x ships libcudss.so.1) plus the CUDA 12 build.
+CUDSS_APT_VER=$(apt-cache madison "cudss-cuda-${CUDA_VERSION_MAJOR}" 2>/dev/null \
+    | awk -v ver="${CUDSS_VERSION}." '{gsub(/ /, "", $3)} index($3, ver) == 1 {print $3; exit}')
 
-if [ -n "${CUDSS_APT_VER}" ]; then
-    echo "Pinning cuDSS to version: ${CUDSS_APT_VER}"
-    apt-get install -y --no-install-recommends "cudss=${CUDSS_APT_VER}"
-else
-    echo "Exact version ${CUDSS_VERSION} not found in repo, installing latest cudss"
-    apt-get install -y --no-install-recommends cudss
+if [ -z "${CUDSS_APT_VER}" ]; then
+    echo "cudss-cuda-${CUDA_VERSION_MAJOR} ${CUDSS_VERSION} not found in the repo" >&2
+    exit 1
 fi
+
+echo "Pinning cuDSS to version: ${CUDSS_APT_VER}"
+CUDSS_SONAME="${CUDSS_VERSION%%.*}"
+apt-get install -y --no-install-recommends \
+    "cudss-cuda-${CUDA_VERSION_MAJOR}=${CUDSS_APT_VER}" \
+    "libcudss${CUDSS_SONAME}-cuda-${CUDA_VERSION_MAJOR}=${CUDSS_APT_VER}" \
+    "libcudss${CUDSS_SONAME}-dev-cuda-${CUDA_VERSION_MAJOR}=${CUDSS_APT_VER}" \
+    "libcudss${CUDSS_SONAME}-static-cuda-${CUDA_VERSION_MAJOR}=${CUDSS_APT_VER}"
 
 # Remove cuda-keyring to prevent the global NVIDIA repo from propagating
 # to subsequent build layers (preserves version control of installed packages)
