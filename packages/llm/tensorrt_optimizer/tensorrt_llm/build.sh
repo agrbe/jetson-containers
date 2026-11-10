@@ -27,6 +27,8 @@ sed -i 's|typing-extensions.*|typing-extensions|' "${DEV_REQUIREMENTS_FILENAME}"
 sed -i "s|^transformers.*|transformers${TRANSFORMERS_VERSION:+==${TRANSFORMERS_VERSION}}|" "${REQUIREMENTS_FILENAME}"
 # nvidia-modelopt: drop the ~=0.37 pin; the nvidia_modelopt stage that follows installs its version
 sed -i -E 's/^(nvidia-modelopt(\[[^]]*\])?)[=<>!~].*/\1/' "${REQUIREMENTS_FILENAME}"
+# setuptools: drop the <80 cap; torch needs <82 and modelopt >=80 (python stage installs <=81)
+sed -i -E 's/^setuptools[=<>!~].*/setuptools/' "${REQUIREMENTS_FILENAME}"
 
 # transformers 5.x port: official rename (HF MIGRATION_GUIDE_V5); no-op once upstream fixes it
 grep -rlE 'AutoModelForVision2Seq' ${SOURCE_DIR}/tensorrt_llm --include='*.py' | \
