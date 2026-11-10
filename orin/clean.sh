@@ -1,51 +1,50 @@
 #!/usr/bin/env bash
 # =============================================================================
 # clean.sh
-# Frees disk space used by the build caches and by the local Docker state.
+# Frees disk space used by the jetson-containers build: images, BuildKit cache
+# (including the ccache mount) and the host uv/pip caches.
 #
 # Goals:
-# - Leave the machine with no leftover containers: running ones are stopped and
-#   then removed. A container in any state pins the image it was created from,
-#   so image pruning cannot reclaim that space while it exists.
-# - Remove by default only the caches that are cheap to rebuild: the uv and pip
-#   download caches, refetched on the next install.
-# - Require an explicit flag for anything whose loss costs compile time: the
-#   BuildKit cache, the ccache mount, the images.
-# - Print every target with its size and the total to be freed, then ask for
-#   confirmation before deleting anything.
+# - Default mode is cheap and safe to run after every successful build: a
+#   rebuild right after it is still fully CACHED.
+# - Every mode prints what it removes, with sizes, before acting; --dry-run
+#   stops there.
+# - Work non-interactively: no prompt, the mode flag is the confirmation and
+#   --dry-run is the preview.
+# - Never touch the devpi/APT data: it lives on bind mounts under
+#   packages/net/devpi/cache, which no docker prune can reach.
 # - Verify the BuildKit prune instead of trusting it: records BuildKit holds as
-#   in use survive 'prune -af', the prune still exits 0, and the space stays
-#   taken in /var/lib/containerd. The leftover is measured after the prune and
-#   reported; --restart-docker restarts the daemon to drop those references
-#   and prunes a second time.
+#   in use survive 'prune -af' while it still exits 0. When that leftover is
+#   real, --cache and --nuke restart the daemon (root or passwordless sudo, or
+#   a sudo prompt on a terminal) and prune again; otherwise they say how.
 #
 # Usage:
-#   ./clean.sh                     # stop + remove containers, then uv and pip
-#   ./clean.sh --keep-running      # leave the running containers alone
-#   ./clean.sh --no-rm-containers  # stop them, but keep them
-#   ./clean.sh --ccache            # + the ccache mount inside BuildKit
-#   ./clean.sh --buildkit          # + the whole BuildKit cache (covers --ccache)
-#   ./clean.sh --buildkit --restart-docker
-#                                  # + restart the daemon and prune again when
-#                                  #   cache survives the prune as in use
-#   ./clean.sh --images            # + unused docker images
-#   ./clean.sh --nuke              # + every docker object: networks, volumes;
-#                                  #   implies --restart-docker
-#   ./clean.sh --force-nuke        # --nuke without the typed NUKE prompt
-#   ./clean.sh --dry-run           # report only, never prompts, never deletes
-#   ./clean.sh --yes               # skip the [y/N] prompt, never the NUKE one
+#   ./clean.sh                 # default: uv/pip caches, dangling images, images
+#                              #   of old builds outside the current chain, and
+#                              #   BuildKit records the current chain did not use
+#                              #   (the ccache mount is always kept)
+#   ./clean.sh --cache         # every cache: uv/pip, whole BuildKit cache, ccache
+#   ./clean.sh --images        # stage images (<name>:*-<stage>) and dangling ones;
+#                              #   final images and devpi/apt images are kept
+#   ./clean.sh --nuke          # everything: all containers, images, volumes,
+#                              #   networks, BuildKit cache and build history
+#   ./clean.sh --dry-run ...   # report only, combinable with any mode
+#
+# The current chain:
+#   The newest logs/<run>/ whose build/NNoMM_*.sh covers all MM stages and whose
+#   every stage log reports 'naming to <tag> done', i.e. the last build that
+#   finished. --simulate runs write the .sh files but no logs, so they never
+#   qualify. Stage tags of newer, unfinished runs are kept as well.
 #
 # Warning:
-#   build.sh runs the local devpi and APT servers as compose project
-#   'devpi-local'. The default stop and remove aborts a build in progress and
-#   makes download.sh fail; pass --keep-running while a build is running.
-#
-#   --restart-docker runs 'systemctl restart docker' (root or sudo), and only
-#   when cache is left in use after the prune. The restart aborts any build in
-#   progress, and containers kept with --no-rm-containers that have a
-#   'restart: always' policy come back up with the daemon.
+#   --nuke stops and removes every container on this host and prunes every
+#   unused volume, including those of other projects.
+#   A daemon restart aborts any build in progress.
 #
 # Optional variables:
+#   JC_REPO                      repository root (default: parent of this script)
+#   CACHE_GRACE_SECONDS          default mode keeps BuildKit records used up to
+#                                this long before the current chain's build began
 #   BUILDKIT_LEFTOVER_MIN_BYTES  cache left after a prune below this is ignored
 #   DOCKER_READY_TIMEOUT         seconds to wait for the daemon after a restart
 #   CONTAINERD_NAMESPACE         namespace whose snapshots are counted
@@ -53,47 +52,50 @@
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-# --- Cache locations ----------------------------------------------------------
+# --- Locations ----------------------------------------------------------------
+JC_REPO="${JC_REPO:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
+LOGS_DIR="${JC_REPO}/logs"
 UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
 PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
+# Local build refs buildx writes per build; only --nuke clears them.
+BUILDX_REFS_DIR="$HOME/.docker/buildx/refs"
 
 # --- Local package servers ----------------------------------------------------
-# Compose project name used by build.sh, matched by label to warn before the
-# servers are stopped from under a running build.
 DEVPI_COMPOSE_PROJECT="devpi-local"
 
+# --- Default-mode retention ---------------------------------------------------
+# Margin before the chain's build start, so clock rounding never drops a record
+# the build touched.
+CACHE_GRACE_SECONDS="${CACHE_GRACE_SECONDS:-3600}"
+
 # --- BuildKit verification ----------------------------------------------------
-# Cache below this size left after a full prune is treated as noise rather than
-# as records stuck in use, so the daemon is never restarted over a few kB.
 BUILDKIT_LEFTOVER_MIN_BYTES="${BUILDKIT_LEFTOVER_MIN_BYTES:-104857600}"
-# Seconds to wait for the daemon to answer again after a restart.
 DOCKER_READY_TIMEOUT="${DOCKER_READY_TIMEOUT:-60}"
-# Namespace the docker daemon keeps its snapshots in under /var/lib/containerd.
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-moby}"
 
 # --- Behavior flags -----------------------------------------------------------
-# STOP_RUNNING and RM_CONTAINERS are the only opt-out switches in the script:
-# they default to 1 and their flags turn them off.
-STOP_RUNNING=1
-RM_CONTAINERS=1
-CLEAN_CCACHE=0
-CLEAN_BUILDKIT=0
+CLEAN_CACHE=0
 CLEAN_IMAGES=0
 NUKE=0
-FORCE_NUKE=0
-RESTART_DOCKER=0
-# Set by resolve_flags when the restart comes from --nuke rather than from its
-# own flag: a missing sudo then downgrades the run instead of aborting it.
-RESTART_IMPLIED=0
 DRY_RUN=0
-ASSUME_YES=0
 
-# --- Reporting state ----------------------------------------------------------
+# --- State --------------------------------------------------------------------
 TOTAL_BYTES=0
-# Set by resolve_flags when a wider prune already accounts for the ccache mount.
-CCACHE_SUBSUMED=0
-# Set when build cache is still held in use at the end of the run.
 BUILDKIT_STUCK=0
+# Image inventory: ref -> id / unique size.
+declare -A IMG_ID=()
+declare -A IMG_UNIQUE=()
+declare -A TAGS_PER_ID=()
+IMG_REFS=()
+# Current chain.
+CHAIN_RUN=""
+CHAIN_ANCHOR=0
+CHAIN_OK=0
+declare -A KEEP_TAGS=()
+declare -A CHAIN_IDS=()
+declare -A CHAIN_REPOS=()
+# Images selected for removal by the default or --images mode.
+DROP_IMAGES=()
 # ──────────────────────────────────────────────────────────────────────────────
 
 # =============================================================================
@@ -101,9 +103,7 @@ BUILDKIT_STUCK=0
 # =============================================================================
 
 usage() {
-    # Print from the line after the opening banner up to the closing one, so the
-    # range never needs updating when the header grows. 'Q' quits without
-    # printing the banner itself.
+    # Print the header between the two banners.
     sed -n '3,$p' "${BASH_SOURCE[0]}" | sed '/^# =\{5,\}/Q; s/^# \{0,1\}//'
     exit 0
 }
@@ -111,8 +111,6 @@ usage() {
 require_command() {
     local cmd="$1"
 
-    # Checking upfront keeps the failure clear instead of aborting halfway
-    # through a multi-step cleanup.
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Required command not found: $cmd"
         exit 1
@@ -124,21 +122,17 @@ disk_free() {
 }
 
 dir_size() {
-    # Prints a human-readable size, or a dash when the path is absent.
     [[ -d "$1" ]] && du -sh "$1" 2>/dev/null | cut -f1 || echo "-"
 }
 
 to_bytes() {
-    # Parses both notations in play: docker's SI strings ("30.07GB", "4.096kB")
-    # and du -h's binary ones ("1.8M"). The mix makes the total approximate,
-    # which is why it is printed with a '~'. There is deliberately no IEC arm:
-    # human() emits IEC, so a human() -> to_bytes() round-trip would silently
-    # fall through to 0. Never feed this function its own output.
+    # Parses docker's SI strings ("30.07GB", "4.096kB") and du -h's ("1.8M").
+    # The mix makes totals approximate, hence the '~'. No IEC arm on purpose:
+    # never feed it human()'s output.
     local value="${1:-}"
     local number unit
 
     [[ -z "$value" || "$value" == "-" ]] && { echo 0; return 0; }
-
     number="${value//[^0-9.]/}"
     unit="${value//[0-9.]/}"
     [[ -z "$number" ]] && { echo 0; return 0; }
@@ -157,31 +151,52 @@ human() {
     numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "${1}B"
 }
 
-is_bounded_cache_dir() {
-    # Only paths under $HOME/.cache may be deleted, so a UV_CACHE_DIR or
-    # PIP_CACHE_DIR pointing at $HOME, / or the repository is refused. This has
-    # to gate the tool-provided cleaners too, not just the rm: 'uv cache clean'
-    # honours UV_CACHE_DIR and would happily wipe whatever it names.
+is_bounded_dir() {
+    # Deletion is allowed only below the given root, so a cache variable that
+    # points at $HOME, / or the repository is refused. Gates the tool cleaners
+    # too: 'uv cache clean' wipes whatever UV_CACHE_DIR names.
     local target="$1"
+    local root="$2"
     local resolved
 
     [[ -d "$target" ]] || return 0
     resolved="$(cd "$target" && pwd -P)"
-
     case "$resolved" in
-        "$HOME"/.cache/?*) return 0 ;;
+        "$root"/?*) return 0 ;;
         *)
-            echo "    REFUSED  outside ~/.cache: $resolved"
+            echo "    REFUSED  outside $root: $resolved"
             return 1
             ;;
     esac
 }
 
-remove_cache_dir() {
-    local target="$1"
+remove_dir() {
+    [[ -d "$1" ]] || return 0
+    rm -rf "$1"
+}
 
-    [[ -d "$target" ]] || return 0
-    rm -rf "$target"
+can_restart_docker() {
+    # Non-interactive callers get passwordless sudo or nothing; a terminal may
+    # answer a password prompt.
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "    systemctl not found: the docker daemon cannot be restarted."
+        return 1
+    fi
+    if (( EUID == 0 )); then
+        return 0
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "    sudo not found: restarting the docker daemon needs root."
+        return 1
+    fi
+    if sudo -n true 2>/dev/null; then
+        return 0
+    fi
+    if [[ -t 0 ]] && sudo -v; then
+        return 0
+    fi
+    echo "    sudo needs a password and there is no terminal to ask on."
+    return 1
 }
 
 run_root() {
@@ -192,73 +207,31 @@ run_root() {
     fi
 }
 
-can_restart_docker() {
-    # Checked right after the confirmation, so a missing tool or a sudo password
-    # prompt shows up before anything is deleted, not halfway through the prunes.
-    if ! command -v systemctl >/dev/null 2>&1; then
-        echo "systemctl not found: the docker daemon cannot be restarted."
-        return 1
-    fi
-    if (( EUID == 0 )); then
-        return 0
-    fi
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "sudo not found: restarting the docker daemon needs root."
-        return 1
-    fi
-    if sudo -n true 2>/dev/null; then
-        return 0
-    fi
-    # No cached credentials: sudo has to prompt, which fails without a terminal.
-    sudo -v
-}
-
 # =============================================================================
 # Docker inspection
 # =============================================================================
 
 docker_size() {
-    # --format keeps the lookup off column positions: the "Build Cache" row has
-    # a space in its type, so field indexes differ between rows. The same is
-    # true of "Local Volumes".
-    #
-    # Deliberately '.Size' and not '.Reclaimable': docker computes the images
-    # reclaimable figure by summing each image's unique size, which ignores that
-    # shared base layers are freed too once every image referencing them is
-    # gone. With the containers removed first, '.Size' is the accurate estimate
-    # and '.Reclaimable' understates it several times over.
+    # '.Size', not '.Reclaimable': docker sums unique sizes for the latter,
+    # which ignores shared layers freed once all their images are gone.
     docker system df --format '{{.Type}}|{{.Size}}' 2>/dev/null \
         | awk -F'|' -v t="$1" '$1 == t {print $2; exit}'
 }
 
 cachemount_size() {
     # The ccache is one exec.cachemount record inside the BuildKit store.
-    docker buildx du --verbose 2>/dev/null | awk '
-        /^Size:/{sz=$2}
-        /^Type:/{if ($2 == "exec.cachemount") {print sz; found=1; exit}}
-        END{if (!found) print "-"}'
+    { docker buildx du --filter 'type=exec.cachemount' \
+        --format '{{.Size}}' 2>/dev/null || true; } \
+        | awk 'NR == 1 {print} END{if (NR == 0) print "-"}'
 }
 
 buildkit_usage() {
-    # Prints "<reclaimable> <total>" from the summary lines of 'buildx du', with
-    # a dash for a missing figure. Total minus reclaimable is the cache BuildKit
-    # holds as in use, which no prune removes. The awk reads to the end on
-    # purpose: an early 'exit' would SIGPIPE docker and trip 'pipefail'.
+    # "<reclaimable> <total>" from 'buildx du'. Reads to the end so docker
+    # never gets SIGPIPE under 'pipefail'.
     { docker buildx du 2>/dev/null || true; } | awk '
         $1 == "Reclaimable:" {r = $2}
         $1 == "Total:"       {t = $2}
         END{print (r == "" ? "-" : r), (t == "" ? "-" : t)}'
-}
-
-buildkit_inuse_bytes() {
-    local reclaimable total inuse
-
-    read -r reclaimable total < <(buildkit_usage)
-    inuse=$(( $(to_bytes "$total") - $(to_bytes "$reclaimable") ))
-    if (( inuse < 0 )); then
-        inuse=0
-    fi
-    echo "$inuse"
 }
 
 buildkit_total_bytes() {
@@ -268,11 +241,39 @@ buildkit_total_bytes() {
     to_bytes "$total"
 }
 
+buildkit_unused_since() {
+    # Preview of the default-mode prune: what 'buildx prune' without -a and
+    # with until=<secs>s, type!=exec.cachemount removes. Without -a BuildKit
+    # skips internal/frontend records and records shared with images; in-use
+    # records are never reclaimable. 'buildx du' only prints LastUsedAt
+    # humanized, so the age is approximate (exact up to 48h, then in days).
+    local secs="$1"
+
+    { docker buildx du \
+        --format '{{.Type}}|{{.Reclaimable}}|{{.Shared}}|{{.LastUsedAt}}|{{.Size}}' \
+        2>/dev/null || true; } | awk -F'|' -v cut="$secs" '
+        function age(s,   n) {
+            if (s == "" || s ~ /nil/) return 1e12
+            if (s ~ /^Less than/) return 0
+            if (s ~ /^About a minute/) return 60
+            if (s ~ /^About an hour/) return 3600
+            n = s + 0
+            if (s ~ /second/) return n
+            if (s ~ /minute/) return n * 60
+            if (s ~ /hour/)   return n * 3600
+            if (s ~ /day/)    return n * 86400
+            if (s ~ /week/)   return n * 604800
+            if (s ~ /month/)  return n * 2592000
+            return n * 31536000
+        }
+        $1 == "exec.cachemount" || $1 == "internal" || $1 == "frontend" {next}
+        $2 != "true" || $3 == "true" {next}
+        age($4) > cut {print $5}'
+}
+
 containerd_snapshot_count() {
-    # Counts the snapshots behind the images and the build cache, straight from
-    # containerd: the ground truth for what still occupies /var/lib/containerd.
-    # 'ctr' needs root; 'sudo -n' keeps this informational line from ever
-    # prompting, so it prints a dash when no credentials are cached.
+    # Ground truth for /var/lib/containerd; 'ctr' needs root and 'sudo -n'
+    # keeps this informational line from prompting.
     local listing
 
     if ! command -v ctr >/dev/null 2>&1; then
@@ -286,7 +287,6 @@ containerd_snapshot_count() {
         listing="$(sudo -n ctr -n "$CONTAINERD_NAMESPACE" snapshots ls 2>/dev/null)" \
             || { echo "-"; return 0; }
     fi
-    # The first line is the column header.
     awk 'NR > 1 && NF {n++} END{print n + 0}' <<<"$listing"
 }
 
@@ -298,9 +298,6 @@ running_count() {
 }
 
 devpi_is_running() {
-    # build.sh starts devpi and the APT server as compose project 'devpi-local',
-    # and download.sh refuses to run without them. '--filter' exits 0 with empty
-    # output when nothing matches, so the substitution is safe under 'set -e'.
     local ids
 
     ids="$(docker ps -q \
@@ -309,264 +306,371 @@ devpi_is_running() {
     [[ -n "$ids" ]]
 }
 
+history_count() {
+    { docker buildx history ls --format '{{.Ref}}' 2>/dev/null || true; } \
+        | awk 'NF {n++} END{print n + 0}'
+}
+
+load_images() {
+    # Tags come from 'image ls': 'system df -v' prints one row per id, so a
+    # second tag (the final alias of the last stage) would look missing. The
+    # unique size per id comes from 'system df -v': layers shared with kept
+    # images are not freed, so summing '.Size' would claim terabytes.
+    local line ref id
+    local -A unique=()
+
+    while IFS='|' read -r id line; do
+        [[ -n "$id" ]] && unique["$id"]="$line"
+    done < <(docker system df -v --format \
+        '{{range .Images}}{{.ID}}|{{.UniqueSize}}{{println}}{{end}}' 2>/dev/null)
+
+    while IFS='|' read -r ref id; do
+        [[ -n "$ref" && "$ref" != *"<none>"* ]] || continue
+        IMG_REFS+=("$ref")
+        IMG_ID["$ref"]="$id"
+        IMG_UNIQUE["$ref"]="${unique[$id]:-0B}"
+        TAGS_PER_ID["$id"]=$(( ${TAGS_PER_ID[$id]:-0} + 1 ))
+    done < <(docker image ls --no-trunc \
+        --format '{{.Repository}}:{{.Tag}}|{{.ID}}' 2>/dev/null)
+}
+
+dangling_count() {
+    local -a ids
+
+    mapfile -t ids < <(docker image ls -q --filter dangling=true 2>/dev/null)
+    echo "${#ids[@]}"
+}
+
 # =============================================================================
-# Reporting and confirmation
+# Current chain
+# =============================================================================
+
+run_tags() {
+    # Stage tags of one run, one per build/*.sh.
+    local sh
+
+    for sh in "$1"/build/*.sh; do
+        [[ -f "$sh" ]] || continue
+        grep -o -- '--tag [^ ]*' "$sh" | head -1 | cut -d' ' -f2
+    done
+}
+
+run_finished() {
+    # True when the run has all MM stage scripts and every stage log shows the
+    # image was exported under its tag.
+    local run="$1"
+    local -a shs
+    local total sh tag
+
+    shopt -s nullglob
+    shs=("$run"/build/[0-9]*o[0-9]*_*.sh)
+    shopt -u nullglob
+    (( ${#shs[@]} )) || return 1
+
+    total="${shs[0]##*/}"
+    total="${total#*o}"
+    total="${total%%_*}"
+    (( ${#shs[@]} == 10#$total )) || return 1
+
+    for sh in "${shs[@]}"; do
+        tag="$(grep -o -- '--tag [^ ]*' "$sh" | head -1 | cut -d' ' -f2)"
+        [[ -n "$tag" && -f "${sh%.sh}.txt" ]] || return 1
+        grep -F 'naming to ' "${sh%.sh}.txt" | grep -qF -- "${tag} done" || return 1
+    done
+}
+
+find_chain() {
+    # Walks runs newest first; tags of unfinished newer runs are kept too, so a
+    # build in progress or a failed one never loses its fresh images.
+    local -a runs
+    local i run name tag
+
+    shopt -s nullglob
+    runs=("$LOGS_DIR"/*/)
+    shopt -u nullglob
+
+    for (( i = ${#runs[@]} - 1; i >= 0; i-- )); do
+        run="${runs[i]%/}"
+        while read -r tag; do
+            [[ -n "$tag" ]] && KEEP_TAGS["$tag"]=1
+        done < <(run_tags "$run")
+        if run_finished "$run"; then
+            CHAIN_RUN="$run"
+            break
+        fi
+    done
+    [[ -n "$CHAIN_RUN" ]] || return 0
+
+    # The run directory is named after the build start (local time).
+    name="${CHAIN_RUN##*/}"
+    CHAIN_ANCHOR="$(date -d "${name:0:8} ${name:9:2}:${name:11:2}:${name:13:2}" +%s \
+        2>/dev/null || echo 0)"
+}
+
+check_chain() {
+    # The image and cache parts of the default mode only run when every image
+    # of the finished chain exists: otherwise the chain is not what is on disk.
+    local tag missing=0
+
+    [[ -n "$CHAIN_RUN" ]] || { echo "Chain: no finished build in $LOGS_DIR"; return 0; }
+    if (( ! CHAIN_ANCHOR )); then
+        echo "Chain: cannot read the start time of $CHAIN_RUN"
+        return 0
+    fi
+    while read -r tag; do
+        [[ -n "$tag" ]] || continue
+        CHAIN_REPOS["${tag%:*}"]=1
+        if [[ -z "${IMG_ID[$tag]:-}" ]]; then
+            echo "Chain: missing image $tag"
+            missing=1
+        fi
+    done < <(run_tags "$CHAIN_RUN")
+    for tag in "${!KEEP_TAGS[@]}"; do
+        [[ -n "${IMG_ID[$tag]:-}" ]] && CHAIN_IDS["${IMG_ID[$tag]}"]=1
+    done
+    if (( missing )); then
+        echo "Chain: incomplete, old images and BuildKit records are left alone."
+        return 0
+    fi
+    CHAIN_OK=1
+    echo "Chain: ${CHAIN_RUN#"$JC_REPO"/} ($(run_tags "$CHAIN_RUN" | wc -l) stages," \
+         "started $(date -d "@$CHAIN_ANCHOR" '+%F %T'))"
+}
+
+select_old_images() {
+    # Same repository as the chain, not a kept tag, and not sharing an id with
+    # a kept tag: that last rule keeps the final alias of the last stage.
+    local ref
+
+    for ref in "${IMG_REFS[@]}"; do
+        [[ -n "${CHAIN_REPOS[${ref%:*}]:-}" ]] || continue
+        [[ -z "${KEEP_TAGS[$ref]:-}" ]] || continue
+        [[ -z "${CHAIN_IDS[${IMG_ID[$ref]}]:-}" ]] || continue
+        DROP_IMAGES+=("$ref")
+    done
+}
+
+select_stage_images() {
+    # A stage image is any tag some logs/<run>/build/*.sh built. The final tag
+    # is never a stage tag, and devpi/apt images are built by compose.
+    local -A stage=()
+    local -a runs
+    local run tag ref
+
+    shopt -s nullglob
+    runs=("$LOGS_DIR"/*/)
+    shopt -u nullglob
+    for run in "${runs[@]}"; do
+        while read -r tag; do
+            [[ -n "$tag" ]] && stage["$tag"]=1
+        done < <(run_tags "${run%/}")
+    done
+    for ref in "${IMG_REFS[@]}"; do
+        [[ -n "${stage[$ref]:-}" ]] && DROP_IMAGES+=("$ref")
+    done
+    return 0
+}
+
+# =============================================================================
+# Reporting
 # =============================================================================
 
 report_row() {
-    # Prints one target and adds it to TOTAL_BYTES when it is going to be
-    # removed, so the total reflects the flags actually given. 'subsumed' marks
-    # a target a wider prune already accounts for: it still shows as selected,
-    # but contributes nothing, otherwise its bytes would be counted twice.
+    # Adds the size to TOTAL_BYTES when the action is 'clean'.
     local label="$1"
     local size="$2"
-    local selected="$3"
-    local subsumed="${4:-0}"
-    local action="${5:-keep}"
+    local action="$3"
 
-    if (( selected )); then
-        if (( subsumed )); then
-            action='clean*'
-        else
-            action=clean
-            TOTAL_BYTES=$(( TOTAL_BYTES + $(to_bytes "$size") ))
-        fi
+    if [[ "$action" == clean ]]; then
+        TOTAL_BYTES=$(( TOTAL_BYTES + $(to_bytes "$size") ))
     fi
-
-    printf '%-30s %12s  %s\n' "$label" "$size" "$action"
+    printf '%-36s %12s  %s\n' "$label" "$size" "$action"
 }
 
-warn_devpi() {
-    if ! (( STOP_RUNNING || RM_CONTAINERS || NUKE )); then
-        return 0
-    fi
-    if ! devpi_is_running; then
-        return 0
-    fi
-
-    echo "WARNING  the local package servers (${DEVPI_COMPOSE_PROJECT}) are running."
-    echo "         Stopping them aborts a build.sh in progress and breaks download.sh."
-    echo "         Restart them with ./launch_pypi.sh, or re-run with --keep-running."
-    echo "         Their data lives on bind mounts, so no prune here drops the index."
-    echo "-----------------------------------------------------------------------------"
+pick() {
+    # "clean" when the flag is set, "keep" otherwise.
+    if (( $1 )); then echo clean; else echo keep; fi
 }
 
-note_buildkit_inuse() {
-    # The 'Build Cache' row is '.Size', which includes the records in use. Those
-    # survive the prune, so the estimate is flagged before the confirmation.
-    local inuse
+drop_size() {
+    # Removing a tag frees the image only when every tag of its id goes.
+    local ref="$1"
+    local id="${IMG_ID[$ref]}"
+    local ref2 dropped=0
 
-    inuse="$(buildkit_inuse_bytes)"
-    if (( inuse <= BUILDKIT_LEFTOVER_MIN_BYTES )); then
-        return 0
-    fi
-
-    echo "Build cache held in use by BuildKit: ~$(human "$inuse"). A prune alone skips it."
-    if (( RESTART_DOCKER )); then
-        echo "  The docker daemon is restarted to release it; this aborts a running build."
+    for ref2 in "${DROP_IMAGES[@]}"; do
+        [[ "${IMG_ID[$ref2]}" == "$id" ]] && dropped=$(( dropped + 1 ))
+    done
+    if (( dropped < TAGS_PER_ID[$id] )); then
+        echo "0B"
     else
-        echo "  Add --restart-docker to restart the daemon and prune it as well."
+        echo "${IMG_UNIQUE[$ref]}"
     fi
+}
+
+images_bytes() {
+    # Each id once, so a multi-tag image is not counted per tag.
+    local -A seen=()
+    local ref total=0
+
+    for ref in "${DROP_IMAGES[@]}"; do
+        [[ -z "${seen[${IMG_ID[$ref]}]:-}" ]] || continue
+        seen["${IMG_ID[$ref]}"]=1
+        total=$(( total + $(to_bytes "$(drop_size "$ref")") ))
+    done
+    echo "$total"
 }
 
 print_targets() {
-    local containers_action=keep
+    local default_mode=$(( ! CLEAN_CACHE && ! CLEAN_IMAGES && ! NUKE ))
+    local host_caches=$(( default_mode || CLEAN_CACHE || NUKE ))
+    local whole_cache=$(( CLEAN_CACHE || NUKE ))
+    local devpi_action=keep secs bk ref
 
-    TOTAL_BYTES=0
-    if (( STOP_RUNNING )); then
-        containers_action=stop
+    if devpi_is_running; then
+        devpi_action=stop
     fi
 
     echo "-----------------------------------------------------------------------------"
-    printf '%-30s %12s  %s\n' "TARGET" "SIZE" "ACTION"
-    # Rows follow the order in which main() acts on them.
-    report_row "Containers (run: $(running_count))" \
-               "$(docker_size 'Containers')"     "$RM_CONTAINERS" 0 "$containers_action"
-    report_row "Docker volumes (local)"  "$(docker_size 'Local Volumes')" "$NUKE"
-    report_row "~/.cache/uv"             "$(dir_size "$UV_CACHE_DIR")"    1
-    report_row "~/.cache/pip"            "$(dir_size "$PIP_CACHE_DIR")"   1
-    report_row "BuildKit: ccache mount"  "$(cachemount_size)" \
-               "$CLEAN_CCACHE" "$CCACHE_SUBSUMED"
-    report_row "BuildKit: build cache"   "$(docker_size 'Build Cache')"   "$CLEAN_BUILDKIT"
-    report_row "Docker images"           "$(docker_size 'Images')"        "$CLEAN_IMAGES"
+    printf '%-36s %12s  %s\n' "TARGET" "SIZE" "ACTION"
+    report_row "devpi-local servers (data kept)" "-" "$devpi_action"
+    if (( NUKE )); then
+        report_row "Containers (run: $(running_count))" "$(docker_size 'Containers')" clean
+        report_row "Docker volumes (unused)" "$(docker_size 'Local Volumes')" clean
+    fi
+    report_row "~/.cache/uv" "$(dir_size "$UV_CACHE_DIR")" "$(pick "$host_caches")"
+    report_row "~/.cache/pip" "$(dir_size "$PIP_CACHE_DIR")" "$(pick "$host_caches")"
+    report_row "BuildKit: ccache mount" "$(cachemount_size)" "$(pick "$whole_cache")"
+
+    if (( whole_cache )); then
+        # The ccache figure is inside the build cache one: count it once.
+        TOTAL_BYTES=$(( TOTAL_BYTES - $(to_bytes "$(cachemount_size)") ))
+        report_row "BuildKit: whole build cache" "$(docker_size 'Build Cache')" clean
+    elif (( default_mode && CHAIN_OK )); then
+        secs=$(( $(date +%s) - CHAIN_ANCHOR + CACHE_GRACE_SECONDS ))
+        bk="$(buildkit_unused_since "$secs" | while read -r s; do to_bytes "$s"; echo; done \
+            | awk '{t += $1} END{print t + 0}')"
+        # Printed directly: to_bytes must never read human()'s output back.
+        printf '%-36s %12s  %s\n' "BuildKit: unused by chain (~)" "$(human "$bk")" clean
+        TOTAL_BYTES=$(( TOTAL_BYTES + bk ))
+        report_row "BuildKit: build cache (total)" "$(docker_size 'Build Cache')" keep
+    else
+        report_row "BuildKit: build cache" "$(docker_size 'Build Cache')" keep
+    fi
+
+    if (( NUKE )); then
+        report_row "BuildKit: build history ($(history_count))" "-" clean
+        report_row "~/.docker/buildx/refs" "$(dir_size "$BUILDX_REFS_DIR")" clean
+        report_row "Docker images (all)" "$(docker_size 'Images')" clean
+    else
+        report_row "Dangling images ($(dangling_count))" "-" "$(pick $(( default_mode || CLEAN_IMAGES )))"
+        if (( ${#DROP_IMAGES[@]} )); then
+            report_row "Image tags to remove (${#DROP_IMAGES[@]})" \
+                "$(human "$(images_bytes)")" "-"
+            TOTAL_BYTES=$(( TOTAL_BYTES + $(images_bytes) ))
+            for ref in "${DROP_IMAGES[@]}"; do
+                printf '    %-66s %10s\n' "$ref" "$(drop_size "$ref")"
+            done
+        elif (( default_mode || CLEAN_IMAGES )); then
+            report_row "Images to remove" "0B" "-"
+        fi
+    fi
     echo "-----------------------------------------------------------------------------"
     echo "To free: ~$(human "$TOTAL_BYTES")   |   Free on / now: $(disk_free)"
-    if (( CLEAN_CCACHE && CCACHE_SUBSUMED )); then
-        echo "* already counted inside a larger target"
+    if (( ${#DROP_IMAGES[@]} )); then
+        echo "Image sizes are unique sizes: a lower bound, layers shared only among"
+        echo "removed images are freed too."
     fi
-    if (( ! RM_CONTAINERS )); then
-        echo "Containers are kept, so the image figure is an upper bound."
-    fi
-    if (( CLEAN_BUILDKIT )); then
-        note_buildkit_inuse
+    if (( NUKE )); then
+        echo "Images and build cache share snapshots in the containerd store, so the"
+        echo "real total is lower than their sum."
     fi
     if (( DRY_RUN )); then
         echo "Mode: DRY-RUN (nothing will be deleted)"
     fi
     echo "-----------------------------------------------------------------------------"
-    warn_devpi
-}
-
-open_tty() {
-    # Read from the terminal rather than stdin so the prompt survives a piped
-    # stdout. A '-r' test is not enough: /dev/tty exists and looks readable even
-    # with no controlling terminal, and only the open fails.
-    if ! ( : </dev/tty ) 2>/dev/null; then
-        echo "No terminal to confirm on."
-        echo "  Use --yes to skip the [y/N] prompt, and --force-nuke for --nuke."
-        exit 1
-    fi
-    exec 3</dev/tty
-}
-
-ask_yes_no() {
-    local answer
-
-    while true; do
-        # A failing read means the descriptor was closed with Ctrl-D. Treating
-        # it as a deliberate abort keeps 'set -e' from killing the script with
-        # status 1 and no message at all.
-        if ! read -r -u 3 -p "Delete everything marked 'clean'? [y/N]: " answer; then
-            echo
-            echo "Cancelled. Nothing was deleted."
-            exit 0
-        fi
-        case "${answer,,}" in
-            y|yes)   return 0 ;;
-            ''|n|no) echo "Cancelled. Nothing was deleted."; exit 0 ;;
-            *) echo "Answer y or n." ;;
-        esac
-    done
-}
-
-ask_nuke() {
-    local answer
-
-    # Blank line so the warning does not run into the answer just typed.
-    echo
-    echo "A total prune removes every unused image, the whole build cache, all"
-    echo "stopped containers, unused networks and unused volumes, including named"
-    echo "volumes belonging to other projects on this machine."
-    # Single shot and case-sensitive on purpose: a prompt this destructive
-    # should not invite a second attempt.
-    if ! read -r -u 3 -p "Type NUKE to confirm: " answer; then
-        echo
-        echo "Cancelled. Nothing was deleted."
-        exit 0
-    fi
-    if [[ "$answer" != "NUKE" ]]; then
-        echo "Not confirmed. Nothing was deleted."
-        exit 0
-    fi
-}
-
-confirm() {
-    local need_yesno=1
-    local need_nuke=0
-
-    if (( DRY_RUN )); then
-        return 0
-    fi
-    if (( ASSUME_YES )); then
-        need_yesno=0
-    fi
-    # --yes covers the ordinary prompt only; the typed confirmation is the whole
-    # point of --nuke and is waived exclusively by --force-nuke.
-    if (( NUKE && ! FORCE_NUKE )); then
-        need_nuke=1
-    fi
-    if (( ! need_yesno && ! need_nuke )); then
-        echo "--yes given, proceeding."
-        return 0
-    fi
-
-    open_tty
-    if (( need_yesno )); then
-        ask_yes_no
-    fi
-    if (( need_nuke )); then
-        ask_nuke
-    fi
-    exec 3<&-
 }
 
 # =============================================================================
 # Cleaners
 # =============================================================================
 
-stop_containers() {
-    local -a ids
-
-    if (( ! STOP_RUNNING )); then
+stop_devpi() {
+    if ! devpi_is_running; then
         return 0
     fi
-
-    echo "==> stopping running containers"
-    # The array is not optional: 'docker stop' with no arguments exits 1, which
-    # would abort the whole script on an idle host under 'set -e'.
-    mapfile -t ids < <(docker ps -q 2>/dev/null)
-    if (( ! ${#ids[@]} )); then
-        echo "    none running"
-        return 0
-    fi
-    docker stop "${ids[@]}" >/dev/null
-    echo "    stopped ${#ids[@]}"
+    echo "==> stopping the local package servers ($DEVPI_COMPOSE_PROJECT)"
+    # stop_pypi.sh runs 'compose down': containers and network go, the bind
+    # mounted data stays.
+    "${JC_REPO}/stop_pypi.sh" >/dev/null
+    echo "    stopped. Restart them with: ${JC_REPO}/launch_pypi.sh"
 }
 
-remove_containers() {
-    if (( ! RM_CONTAINERS )); then
-        return 0
-    fi
+stop_all_containers() {
+    local -a ids
 
-    echo "==> removing containers"
-    # 'container prune' touches stopped containers only. That is what makes
-    # --keep-running protect a running devpi: no 'rm -f' is ever issued.
+    echo "==> stopping and removing all containers"
+    # 'docker stop' with no arguments exits 1 under 'set -e'.
+    mapfile -t ids < <(docker ps -q 2>/dev/null)
+    if (( ${#ids[@]} )); then
+        docker stop "${ids[@]}" >/dev/null
+    fi
     docker container prune -f 2>&1 | tail -1
 }
 
-clean_uv() {
+clean_host_caches() {
     echo "==> uv"
-    is_bounded_cache_dir "$UV_CACHE_DIR" || return 0
-
-    # 'uv cache clean' knows the layout; the rm covers hosts without uv.
-    if command -v uv >/dev/null 2>&1; then
-        UV_CACHE_DIR="$UV_CACHE_DIR" uv cache clean >/dev/null 2>&1 \
-            || remove_cache_dir "$UV_CACHE_DIR"
-    else
-        remove_cache_dir "$UV_CACHE_DIR"
+    if is_bounded_dir "$UV_CACHE_DIR" "$HOME/.cache"; then
+        if command -v uv >/dev/null 2>&1; then
+            UV_CACHE_DIR="$UV_CACHE_DIR" uv cache clean >/dev/null 2>&1 \
+                || remove_dir "$UV_CACHE_DIR"
+        else
+            remove_dir "$UV_CACHE_DIR"
+        fi
+        echo "    OK"
     fi
-    echo "    OK"
-}
-
-clean_pip() {
     echo "==> pip"
-    is_bounded_cache_dir "$PIP_CACHE_DIR" || return 0
-
-    if command -v pip3 >/dev/null 2>&1; then
-        PIP_CACHE_DIR="$PIP_CACHE_DIR" pip3 cache purge >/dev/null 2>&1 \
-            || remove_cache_dir "$PIP_CACHE_DIR"
-    else
-        remove_cache_dir "$PIP_CACHE_DIR"
+    if is_bounded_dir "$PIP_CACHE_DIR" "$HOME/.cache"; then
+        if command -v pip3 >/dev/null 2>&1; then
+            PIP_CACHE_DIR="$PIP_CACHE_DIR" pip3 cache purge >/dev/null 2>&1 \
+                || remove_dir "$PIP_CACHE_DIR"
+        else
+            remove_dir "$PIP_CACHE_DIR"
+        fi
+        echo "    OK"
     fi
-    echo "    OK"
 }
 
-clean_ccache() {
-    echo "==> ccache (BuildKit type=cache mount)"
-
-    # The ccache lives inside the BuildKit store as an exec.cachemount record,
-    # so it is pruned by filter rather than from the filesystem.
-    docker buildx prune --filter "type=exec.cachemount" -f 2>&1 | tail -1
+clean_dangling() {
+    echo "==> dangling images"
+    docker image prune -f 2>&1 | tail -1
 }
 
-clean_buildkit() {
-    echo "==> BuildKit build cache"
+remove_images() {
+    local ref failed=0
 
-    # -a also drops internal/frontend records. Verified: a populated 41.95MB
-    # exec.cachemount is gone after this, which is why --buildkit subsumes
-    # --ccache instead of running both.
-    docker buildx prune -af 2>&1 | tail -1
-    verify_buildkit
+    echo "==> removing ${#DROP_IMAGES[@]} image tag(s)"
+    # By tag, without -f: an id still tagged elsewhere only loses this name,
+    # and an image a container uses is refused instead of forced.
+    for ref in "${DROP_IMAGES[@]}"; do
+        if ! docker image rm "$ref" >/dev/null 2>&1; then
+            echo "    FAILED  $ref (in use by a container?)"
+            failed=$(( failed + 1 ))
+        fi
+    done
+    echo "    removed $(( ${#DROP_IMAGES[@]} - failed )), failed $failed"
+}
+
+clean_buildkit_unused() {
+    # LastUsedAt of every record a build loads, cache hits included, is bumped
+    # to the build time, so the chain's records are all newer than its start.
+    # Without -a, internal/frontend records and records shared with images are
+    # kept as well; the ccache mount is excluded by type.
+    local secs=$(( $(date +%s) - CHAIN_ANCHOR + CACHE_GRACE_SECONDS ))
+
+    echo "==> BuildKit records not used since $(date -d "@$(( CHAIN_ANCHOR - CACHE_GRACE_SECONDS ))" '+%F %T')"
+    docker buildx prune -f --filter "until=${secs}s" \
+        --filter 'type!=exec.cachemount' 2>&1 | tail -1
 }
 
 restart_docker() {
@@ -577,8 +681,7 @@ restart_docker() {
         echo "    FAILED  could not restart docker.service"
         return 1
     fi
-    # systemctl returns once the unit is active, but the API socket can lag a
-    # moment behind; the next prune must not race it.
+    # The API socket can lag behind the unit becoming active.
     until docker info >/dev/null 2>&1; do
         if (( waited >= DOCKER_READY_TIMEOUT )); then
             echo "    FAILED  daemon not answering after ${DOCKER_READY_TIMEOUT}s"
@@ -591,33 +694,20 @@ restart_docker() {
 }
 
 verify_buildkit() {
-    # 'buildx prune -af' exits 0 and prints a total even when it removed almost
-    # nothing, so its output proves little. What is still in the store after it
-    # is the reliable signal: after a full prune, anything left is in use.
-    local leftover reclaimable total
+    # After a full prune anything left is in use; only a daemon restart drops
+    # those references, and only when the leftover is worth it.
+    local leftover
 
     leftover="$(buildkit_total_bytes)"
     if (( leftover <= BUILDKIT_LEFTOVER_MIN_BYTES )); then
         echo "    verified: $(human "$leftover") of build cache left"
         return 0
     fi
-
-    echo "    WARNING  $(human "$leftover") of build cache survived the prune:"
-    echo "             BuildKit holds it as in use."
-    if (( ! RESTART_DOCKER )); then
+    echo "    WARNING  $(human "$leftover") of build cache survived the prune (in use)."
+    if ! can_restart_docker || ! restart_docker; then
         BUILDKIT_STUCK=1
         return 0
     fi
-
-    # The in-use references live in the daemon's memory, held by a running
-    # build or left behind by an interrupted one. Only a restart drops them.
-    if ! restart_docker; then
-        BUILDKIT_STUCK=1
-        return 0
-    fi
-    read -r reclaimable total < <(buildkit_usage)
-    echo "    after restart: reclaimable $reclaimable of $total"
-
     echo "==> BuildKit build cache, second pass"
     docker buildx prune -af 2>&1 | tail -1 || true
     leftover="$(buildkit_total_bytes)"
@@ -629,51 +719,46 @@ verify_buildkit() {
     echo "    verified: $(human "$leftover") of build cache left"
 }
 
-report_snapshots() {
-    local count
-
-    count="$(containerd_snapshot_count)"
-    if [[ "$count" == "-" ]]; then
-        echo "containerd snapshots ($CONTAINERD_NAMESPACE): not read, needs root. Check with:"
-        echo "  sudo ctr -n $CONTAINERD_NAMESPACE snapshots ls | wc -l"
-        return 0
-    fi
-    echo "containerd snapshots ($CONTAINERD_NAMESPACE): $count"
-}
-
-report_buildkit_stuck() {
-    if (( ! BUILDKIT_STUCK )); then
-        return 0
-    fi
-
-    echo "WARNING  build cache is still held in use by BuildKit; that space was NOT freed."
-    if (( RESTART_DOCKER )); then
-        echo "         It survived a daemon restart, so a build is most likely running."
-    else
-        echo "         Make sure no build is running, then re-run with:"
-        echo "           ./clean.sh --buildkit --restart-docker"
-    fi
-    echo "         Inspect it with: docker buildx du --verbose --filter inuse"
-}
-
-clean_images() {
-    echo "==> unused docker images"
-
-    docker image prune -af 2>&1 | tail -1
+clean_buildkit_all() {
+    echo "==> BuildKit build cache (all, ccache mount included)"
+    docker buildx prune -af 2>&1 | tail -1
+    verify_buildkit
 }
 
 clean_nuke() {
-    echo "==> NUKE: images, build cache, containers, networks, volumes"
-
-    # buildx runs first so the cache is reached under a docker-container driver
-    # too, where a daemon-level system prune would not see it. Each step is
-    # guarded because 'pipefail' would otherwise abort before the later passes.
+    echo "==> NUKE: build history, images, build cache, networks, volumes"
+    # Each step is guarded so 'pipefail' never skips the later passes. History
+    # records hold logs and provenance blobs no prune reaches.
+    docker buildx history rm --all >/dev/null 2>&1 || true
+    if is_bounded_dir "$BUILDX_REFS_DIR" "$HOME/.docker/buildx"; then
+        remove_dir "$BUILDX_REFS_DIR"
+    fi
     docker buildx prune -af           2>&1 | tail -1 || true
     docker system prune -af --volumes 2>&1 | tail -1 || true
-    # 'system prune --volumes' removes anonymous volumes only; named unused
-    # volumes need a pass of their own.
+    # 'system prune --volumes' removes anonymous volumes only.
     docker volume prune -af           2>&1 | tail -1 || true
     verify_buildkit
+}
+
+report_end() {
+    local count
+
+    echo "-----------------------------------------------------------------------------"
+    if (( NUKE || CLEAN_CACHE || CLEAN_IMAGES )); then
+        count="$(containerd_snapshot_count)"
+        if [[ "$count" == "-" ]]; then
+            echo "containerd snapshots: not read (needs root):" \
+                 "sudo ctr -n $CONTAINERD_NAMESPACE snapshots ls | wc -l"
+        else
+            echo "containerd snapshots ($CONTAINERD_NAMESPACE): $count"
+        fi
+    fi
+    echo "Free on / after: $(disk_free)"
+    if (( BUILDKIT_STUCK )); then
+        echo "WARNING  build cache is still held in use by BuildKit; that space was NOT freed."
+        echo "         With no build running: sudo systemctl restart docker && $0 --cache"
+        echo "         Inspect it with: docker buildx du --verbose --filter inuse"
+    fi
 }
 
 # =============================================================================
@@ -683,17 +768,11 @@ clean_nuke() {
 parse_args() {
     while (( $# )); do
         case "$1" in
-            --keep-running)     STOP_RUNNING=0 ;;
-            --no-rm-containers) RM_CONTAINERS=0 ;;
-            --ccache)           CLEAN_CCACHE=1 ;;
-            --buildkit)         CLEAN_BUILDKIT=1 ;;
-            --images)           CLEAN_IMAGES=1 ;;
-            --nuke)             NUKE=1 ;;
-            --force-nuke)       NUKE=1; FORCE_NUKE=1 ;;
-            --restart-docker)   RESTART_DOCKER=1 ;;
-            --dry-run)          DRY_RUN=1 ;;
-            --yes|-y)           ASSUME_YES=1 ;;
-            -h|--help)          usage ;;
+            --cache)        CLEAN_CACHE=1 ;;
+            --images)       CLEAN_IMAGES=1 ;;
+            --nuke)         NUKE=1 ;;
+            --dry-run)      DRY_RUN=1 ;;
+            -h|--help)      usage ;;
             *)
                 echo "Unknown argument: $1"
                 echo "  Use --help to see the options."
@@ -702,46 +781,10 @@ parse_args() {
         esac
         shift
     done
-}
-
-resolve_flags() {
-    # Every flag implication lives here, and this runs before the report, so the
-    # ACTION column can never disagree with what main() goes on to do.
     if (( NUKE )); then
-        if (( ! STOP_RUNNING )); then
-            echo "--nuke cannot honour --keep-running: a total prune stops everything."
-            exit 1
-        fi
-        # A total prune covers every docker-side target, so the granular flags
-        # are turned on for the report while main() skips their cleaners.
-        CLEAN_CCACHE=1
-        CLEAN_BUILDKIT=1
-        CLEAN_IMAGES=1
-        RM_CONTAINERS=1
-        # A total prune is expected to leave nothing behind, so it also gets
-        # the restart that releases cache stuck in use.
-        if (( ! RESTART_DOCKER )); then
-            RESTART_DOCKER=1
-            RESTART_IMPLIED=1
-        fi
+        CLEAN_CACHE=0
+        CLEAN_IMAGES=0
     fi
-    if (( CLEAN_BUILDKIT )); then
-        CLEAN_CCACHE=1
-        CCACHE_SUBSUMED=1
-    fi
-    if (( RESTART_DOCKER && ! STOP_RUNNING )); then
-        echo "--restart-docker cannot honour --keep-running: a daemon restart stops"
-        echo "every container."
-        exit 1
-    fi
-    if (( RESTART_DOCKER && ! CLEAN_BUILDKIT )); then
-        echo "--restart-docker only acts after a full BuildKit prune:"
-        echo "  combine it with --buildkit or --nuke."
-        exit 1
-    fi
-
-    # An arithmetic test as the last statement would make this function return 1
-    # whenever the flag is 0, and that status does trip 'set -e' in the caller.
     return 0
 }
 
@@ -750,69 +793,62 @@ resolve_flags() {
 # =============================================================================
 
 main() {
+    local default_mode
+
     parse_args "$@"
-    resolve_flags
+    default_mode=$(( ! CLEAN_CACHE && ! CLEAN_IMAGES && ! NUKE ))
 
     require_command docker
     require_command df
     require_command du
     require_command awk
+    require_command date
+
+    if (( default_mode || CLEAN_IMAGES )); then
+        load_images
+    fi
+    if (( default_mode )); then
+        find_chain
+        check_chain
+        if (( CHAIN_OK )); then
+            select_old_images
+        fi
+    elif (( CLEAN_IMAGES )); then
+        select_stage_images
+    fi
 
     print_targets
-    confirm
-
     if (( DRY_RUN )); then
         echo "DRY-RUN: no action taken."
         exit 0
     fi
 
-    if (( RESTART_DOCKER )) && ! can_restart_docker; then
-        if (( ! RESTART_IMPLIED )); then
-            echo "--restart-docker cannot run. Nothing was deleted."
-            exit 1
-        fi
-        # --nuke predates the restart; it keeps working where the restart is
-        # not possible, and the leftover check still reports stuck cache.
-        echo "WARNING  continuing --nuke without the daemon restart."
-        RESTART_DOCKER=0
-    fi
-
-    # Containers pin both the image they were created from and the volumes they
-    # mount, in any state. Image, volume and system prunes only reclaim the full
-    # amount once the containers are gone, so this order is required.
-    stop_containers
-    remove_containers
-
-    clean_uv
-    clean_pip
-
     if (( NUKE )); then
-        # The destructive superset runs last, so a failure here still leaves the
-        # cheap reclaims above already banked.
+        stop_devpi
+        stop_all_containers
+        clean_host_caches
         clean_nuke
-    else
-        # A full BuildKit prune already covers the mount, so the narrow filter
-        # only runs when the full prune was not requested. Written as 'if'
-        # rather than '(( ... )) && cmd' to keep the style uniform with the
-        # rest of the script.
-        if (( CLEAN_CCACHE && ! CLEAN_BUILDKIT )); then
-            clean_ccache
-        fi
-        if (( CLEAN_BUILDKIT )); then
-            clean_buildkit
-        fi
-        if (( CLEAN_IMAGES )); then
-            clean_images
-        fi
+        report_end
+        return 0
     fi
 
-    echo "-----------------------------------------------------------------------------"
-    # Only worth a line when a docker-side store was pruned in this run.
-    if (( CLEAN_BUILDKIT || CLEAN_IMAGES )); then
-        report_snapshots
+    stop_devpi
+    if (( default_mode || CLEAN_CACHE )); then
+        clean_host_caches
     fi
-    echo "Free on / after: $(disk_free)"
-    report_buildkit_stuck
+    if (( default_mode || CLEAN_IMAGES )); then
+        clean_dangling
+        if (( ${#DROP_IMAGES[@]} )); then
+            remove_images
+        fi
+    fi
+    if (( default_mode && CHAIN_OK )); then
+        clean_buildkit_unused
+    fi
+    if (( CLEAN_CACHE )); then
+        clean_buildkit_all
+    fi
+    report_end
 }
 
 main "$@"
