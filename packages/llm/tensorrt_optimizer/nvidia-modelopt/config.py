@@ -13,6 +13,8 @@ def nvidiamodelopt(version, requires=None, default=False):
         'NVIDIA_MODELOPT_VERSION': version,
     }
 
+    pkg['test'] = f'test.py {version}'
+
     builder = pkg.copy()
 
     builder['name'] = f'nvidia_modelopt:{version}-builder'
@@ -26,5 +28,6 @@ def nvidiamodelopt(version, requires=None, default=False):
 
 package = [
     nvidiamodelopt('0.46.1', default=False),
-    nvidiamodelopt('0.47.0', default=True)
+    nvidiamodelopt('0.47.0', default=False),
+    nvidiamodelopt('0.48.0', default=True)
 ]
