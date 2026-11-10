@@ -4,7 +4,7 @@ from packages.ml.pytorch.version import PYTORCH_VERSION
 from jetson_containers import update_dependencies
 
 
-def xformers(version, requires=None, pytorch=None, default=True):
+def xformers(version, mslk, requires=None, pytorch=None, default=True):
     pkg = package.copy()
 
     if pytorch:
@@ -22,6 +22,7 @@ def xformers(version, requires=None, pytorch=None, default=True):
 
     pkg['build_args'] = {
         'XFORMERS_VERSION': version,
+        'MSLK_VERSION': mslk,
     }
 
     builder = pkg.copy()
@@ -37,5 +38,5 @@ def xformers(version, requires=None, pytorch=None, default=True):
 
 
 package = [
-    xformers('0.0.35', default=(CUDA_VERSION >= Version('12.6'))),
+    xformers('0.0.35', mslk='1.2.0', default=(CUDA_VERSION >= Version('12.6'))),
 ]

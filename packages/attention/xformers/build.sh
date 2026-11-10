@@ -32,7 +32,9 @@ XFORMERS_DISABLE_FLASH_ATTN=1 \
 XFORMERS_MORE_DETAILS=1 \
 python3 setup.py --verbose bdist_wheel --dist-dir /opt/xformers/wheels
 
-uv pip install /opt/xformers/wheels/*.whl
-uv pip install mslk==1.2.0 --default-index https://download.pytorch.org/whl/cu132
+# mslk wheel comes from the PyTorch index; mirror it to devpi with xformers
+pip download --no-deps mslk==${MSLK_VERSION} --index-url https://download.pytorch.org/whl/cu132 -d /opt/xformers/wheels
 
-twine upload --verbose /opt/xformers/wheels/xformers*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
+uv pip install /opt/xformers/wheels/*.whl
+
+twine upload --verbose /opt/xformers/wheels/xformers*.whl /opt/xformers/wheels/mslk*.whl || echo "failed to upload wheel to ${TWINE_REPOSITORY_URL}"
