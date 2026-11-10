@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build.sh
+# build_image.sh
 # Builds the jetson-containers CUDA stack image on this Jetson (JetPack 7.2).
 #
 # Goals:
 # - Bring the local devpi/APT servers up before the build and tear them down
 #   afterwards, success or failure.
+# - Run clean.sh (default mode) after a successful build.
 # - Load version pins from .env and export them only to the builder process.
 # - Keep the interactive terminal output intact (colors/tty progress) while
 #   capturing the full orchestrator log to a file.
 # - Store an ANSI-free copy of the log for grep/diagnosis.
 #
 # Usage:
-#   ./build.sh [--simulate] [--keep-running] [-- <jetson-containers build args>]
+#   ./build_image.sh [--simulate] [--keep-running] [-- <jetson-containers build args>]
 #
 # Options:
 #   --simulate       Forward --simulate to jetson-containers: print the build
 #                    commands and the resolved dependency chain without building.
 #   --keep-running   Leave the devpi/APT containers up after the build instead
-#                    of tearing them down on exit.
+#                    of tearing them down on exit, and skip the post-build
+#                    clean.sh run.
 #   -h, --help       Show usage and exit.
 #   --               Pass everything after it to 'jetson-containers build'
 #                    unchanged, e.g. '-- --skip-tests=intermediate'.
@@ -26,6 +28,7 @@
 # Optional variables:
 #   ENV_FILE=$JC_REPO/.env      -> pin file sourced before the build
 #   IMAGE_NAME=bedrock          -> value passed to --name
+#   PACKAGES_FILE=<script dir>/packages.txt -> package list, one per line
 #   JC_REPO=$(jetson-containers root) -> repo whose logs/<run>/ receives the final log
 # =============================================================================
 set -euo pipefail
@@ -33,55 +36,14 @@ set -euo pipefail
 # ── Configuration ─────────────────────────────────────────────────────────────
 # --- Build target -------------------------------------------------------------
 IMAGE_NAME="${IMAGE_NAME:-bedrock}"
-PACKAGES=(
-    # --- Core: CUDA stack -----------------------------------------------------
-    cuda                      # 13.2.1
-    cudastack:standard
-    cuda-python:13.2
-    # --- Toolchains -----------------------------------------------------------
-    llvm:22
-    pybind11:3.0.2
-    # --- ONNX -----------------------------------------------------------------
-    onnx                      # 1.22.0
-    onnxruntime:1.29.0
-    # --- Multimedia / CV (system libs, no torch) ------------------------------
-    ffmpeg:8.1.2
-    opencv:5.0.0
-    # --- PyTorch ecosystem ----------------------------------------------------
-    pytorch:2.12
-    torchvision:0.27.0
-    torchcodec                # 0.17.0
-    torchaudio:2.11.0
-    triton:3.7.1
-    torchao:0.18.0
-    # --- Hugging Face ---------------------------------------------------------
-    transformers:5.14.1
-    # --- Kernels: CUTLASS, attention, quantization ----------------------------
-    cutlass:4.2.0
-    flash-attention:2.8.3.post2
-    flashinfer:0.6.18
-    xformers:0.0.35
-    bitsandbytes:0.50.2
-    # --- Structured output / tokenizers ---------------------------------------
-    xgrammar:0.2.7
-    mistral_common:1.12.0
-    # --- KV-cache transfer ----------------------------------------------------
-    mooncake:0.3.13.post1
-    nixl:1.4.1
-    # --- TensorRT -------------------------------------------------------------
-    torch_tensorrt            # 2.12.0
-    torch2trt                 # 0.5.0
-    tensorrt_llm:1.2.1
-    nvidia_modelopt:0.47.0
-    tensorrt_edgellm:0.10.1
-    # --- LLM serving ----------------------------------------------------------
-    vllm:0.31.0
-)
+# One package per line, in build order; '#' starts a comment.
+PACKAGES_FILE="${PACKAGES_FILE:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/packages.txt}"
 
 # --- Behavior flags -----------------------------------------------------------
-# Dry-run mode. Set by --simulate and read only by run_build/print_config.
+# Dry-run mode. Set by --simulate; read by run_build, print_config and
+# post_build_clean.
 SIMULATE=0
-# Skip the server teardown in cleanup. Set by --keep-running.
+# Skip the server teardown and the post-build clean.sh. Set by --keep-running.
 KEEP_RUNNING=0
 # Extra 'jetson-containers build' arguments given after '--'.
 PASSTHROUGH=()
@@ -89,7 +51,6 @@ PASSTHROUGH=()
 # --- Local package servers ----------------------------------------------------
 # 'jetson-containers root' prints the checkout the CLI runs from.
 JC_REPO="${JC_REPO:-$(jetson-containers root)}"
-DEVPI_COMPOSE_FILE="${JC_REPO}/packages/net/devpi/compose.yml"
 
 # --- Environment pins ---------------------------------------------------------
 # launch_pypi.sh writes the server URLs into the repo's .env, whatever the cwd.
@@ -107,13 +68,14 @@ LOG="build_$(date +%Y%m%d_%H%M%S).log"
 
 usage() {
     cat <<'EOF'
-Usage: ./build.sh [options]
+Usage: ./build_image.sh [options]
 
 Options:
   --simulate       Forward --simulate to jetson-containers: print the build
                    commands and the resolved dependency chain without building.
   --keep-running   Leave the devpi/APT containers up after the build instead
-                   of tearing them down on exit.
+                   of tearing them down on exit, and skip the post-build
+                   clean.sh run.
   -h, --help       Show this message and exit.
   --               Pass everything after it to 'jetson-containers build'
                    unchanged, e.g. '-- --skip-tests=intermediate'.
@@ -128,6 +90,17 @@ require_command() {
         echo "Required command not found: $cmd"
         exit 1
     fi
+}
+
+load_packages() {
+    if [[ ! -f "$PACKAGES_FILE" ]]; then
+        echo "Package list not found: $PACKAGES_FILE"
+        exit 1
+    fi
+
+    # Drop comments, surrounding whitespace and blank lines.
+    mapfile -t PACKAGES < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' \
+                                -e 's/[[:space:]]*$//' -e '/^$/d' "$PACKAGES_FILE")
 }
 
 load_env() {
@@ -177,6 +150,7 @@ print_config() {
     echo "-----------------------------------------------------------------------------"
     echo "Image:    $IMAGE_NAME"
     echo "Packages: ${PACKAGES[*]}"
+    echo "List:     $PACKAGES_FILE"
     echo "Pins:     $ENV_FILE"
     echo "Wheels:   ${DEVPI_URL:-<absent>}"
     echo "Tarballs: ${LOCAL_TAR_INDEX_URL:-<absent>}"
@@ -227,6 +201,17 @@ run_build() {
     echo -e "\n"
 }
 
+post_build_clean() {
+    # Default clean.sh mode is cheap and keeps the just-built chain CACHED.
+    # It also stops the devpi/APT servers, so --keep-running skips it. A clean
+    # failure only warns: the image is already built.
+    if [[ "$SIMULATE" -eq 1 || "$KEEP_RUNNING" -eq 1 ]]; then
+        return 0
+    fi
+    echo "==> Cleaning up (${JC_REPO}/orin/clean.sh)..."
+    "${JC_REPO}/orin/clean.sh" || echo "WARNING: clean.sh failed (exit $?); the build succeeded."
+}
+
 cleanup() {
     # Runs on EXIT (success or failure) so the servers are always stopped and
     # the log is always consolidated. $? is captured first and re-raised last,
@@ -240,8 +225,9 @@ cleanup() {
         echo "==> Leaving the local servers running (--keep-running)."
         echo "    To stop: ${JC_REPO}/stop_pypi.sh"
     else
+        # A no-op when clean.sh already stopped them after a successful build.
         echo "==> Stopping the local servers..."
-        docker compose -p devpi-local -f "$DEVPI_COMPOSE_FILE" down || true
+        "${JC_REPO}/stop_pypi.sh" || true
     fi
 
     if [[ -f "$LOG" ]]; then
@@ -309,6 +295,8 @@ require_command sed
 require_command docker
 require_command curl
 
+load_packages
+
 # -----------------------------------------------------------------------------
 # Build execution
 # -----------------------------------------------------------------------------
@@ -325,3 +313,4 @@ start_servers
 print_config
 
 run_build
+post_build_clean

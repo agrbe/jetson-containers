@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
-"""Check the package list of a build script for version divergences before building.
+"""Check the package list (packages.txt) for version divergences before building.
 
-Resolves the build chain exactly like 'jetson-containers build' and reports:
+Resolves the build chain exactly like 'jetson-containers build' (with the pins
+of $ENV_FILE, default <repo>/.env, as build_image.sh sources it) and reports:
   - pins dropped or replaced while resolving the chain (first occurrence wins)
   - version ARGs a Dockerfile declares but the package never passes (empty at build time)
   - hardcoded versions of pinned distributions that differ from the pin
   - pip/uv installs of a pinned distribution without a version
   - git clones without a ref (no --branch and no later checkout of the clone),
-    or falling back to the default branch, and with --online whether the ref
-    exists upstream
+    on a moving branch, or whose ref does not exist upstream (git ls-remote)
+  - across stages: a distribution re-installed without a version after a versioned
+    install, and incompatible specs of one distribution
 
-With --libs it also lists, per stage in build order, the pip distributions the
-stage installs or builds (spec and source line), then the distributions whose
-spec changes between stages, unversioned re-installs and incompatible specs.
+Pins are the packages.txt versions; a bare entry (onnx) takes the version of its
+resolved package config (ONNX_VERSION).
 
 Usage:
-  ./collect_requirements.py --build-sh BUILD_SH [--env .env]
-                               [--pins pins.txt] [--online] [--libs] [PACKAGES ...]
+  ./lint.py [--packages FILE] [-v]
+  ./lint.py [-v] PACKAGE [PACKAGE ...]
 
+-v adds the INFO findings (resolved refs, spec changes between stages) and the
+per-stage list of the pip distributions each stage installs or builds.
 Exits 1 when an ERROR is found.
 """
 
 import argparse
 import contextlib
+import functools
 import io
 import os
 import re
@@ -34,13 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_list as P  # noqa: E402  (stdlib only, safe before the venv re-exec)
 
-VENV_PY = P.ROOT / 'venv' / 'bin' / 'python3'
-
-# jetson_containers needs the repo venv; re-exec under it when started elsewhere
-if VENV_PY.exists() and Path(sys.prefix).resolve() != (P.ROOT / 'venv').resolve():
-    os.execv(str(VENV_PY), [str(VENV_PY), *sys.argv])
-
-sys.path.insert(1, str(P.ROOT))
+P.use_venv()
 from packaging.specifiers import InvalidSpecifier, SpecifierSet  # noqa: E402
 
 INSTALL_RE = re.compile(r'(?:\buv\s+pip|\bpip3?|\bpython3?\s+-m\s+pip)\s+install\b(.*)')
@@ -280,38 +278,26 @@ def dockerfile_envs(dockerfile, values):
     return envs
 
 
-def uv_pins(chain, resolved):
-    """{dist: (version, stage)} registered by 'uv-pin' along the chain."""
-    found = {}
-    for name in chain:
-        pkg = resolved[name]
-        values = {k: str(v) for k, v in (pkg.get('build_args') or {}).items()}
-        specs = []
-        if pkg.get('dockerfile'):
-            dockerfile = Path(pkg['path']) / pkg['dockerfile']
-            if dockerfile.is_file():
-                for _, line in logical_lines(dockerfile):
-                    for arg in re.findall(r'\buv-pin\s+("[^"]+"|\S+)', line):
-                        specs.append(substitute(arg.strip('"\''), values))
-        for spec in specs:
-            m = re.match(r'([A-Za-z0-9_.\-]+)\s*==\s*([^\s;]+)$', spec)
-            if m:
-                found[P.norm(m.group(1))] = (m.group(2), pkg['name'])
-    return found
-
-
+@functools.lru_cache(maxsize=None)
 def git_ls_remote(url, ref):
-    try:
-        out = subprocess.run(
-            ['git', 'ls-remote', url, ref, f'{ref}^{{}}'],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
-        ).stdout
-    except subprocess.TimeoutExpired:
+    """Commit of ref in url, '' when the ref does not exist, None when git cannot
+    reach url (network down, auth): only an answered query proves a ref missing."""
+    for _ in range(2):  # one retry: GitHub drops the odd request
+        try:
+            r = subprocess.run(
+                ['git', 'ls-remote', url, ref, f'{ref}^{{}}'],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        if not r.returncode:
+            break
+    else:
         return None
-    lines = [line.split() for line in out.splitlines() if line.strip()]
+    lines = [line.split() for line in r.stdout.splitlines() if line.strip()]
     peeled = [sha for sha, r in lines if r.endswith('^{}')]
     return (peeled or [sha for sha, _ in lines] or [''])[0]
 
@@ -397,7 +383,6 @@ def check_clone(
     prev,
     values,
     where,
-    online,
     later=None,
     cache=None,
 ):
@@ -477,12 +462,12 @@ def check_clone(
                 f"git clone {url} ref {ref} is computed at build time (not checked)",
                 where,
             )
-    elif online and url and re.fullmatch(r'[0-9a-f]{7,40}', ref):
+    elif url and re.fullmatch(r'[0-9a-f]{7,40}', ref):
         report.add('INFO', stage, f"{url} {ref} is a commit (not checked)", where)
-    elif online and url:
+    elif url:
         sha = git_ls_remote(url, ref)
         if sha is None:
-            report.add('WARN', stage, f"git ls-remote {url} {ref} timed out", where)
+            report.add('WARN', stage, f"git ls-remote {url} {ref} failed (offline?)", where)
         elif not sha:
             nxt = sep == '||' and 'git clone' in next_seg
             default = nxt and not re.search(r'--branch|-b\s', next_seg)
@@ -504,17 +489,6 @@ def check_clone(
             )
         else:
             report.add('INFO', stage, f"{url} {ref} -> {sha[:12]}", where)
-    if (
-        sep == '||'
-        and 'git clone' in next_seg
-        and not re.search(r'--branch|-b\s', next_seg)
-    ):
-        report.add(
-            'INFO',
-            stage,
-            f"git clone {url} --branch {ref} falls back to the default branch if the ref is missing",
-            where,
-        )
 
 
 def package_files(pkg):
@@ -532,7 +506,7 @@ def package_files(pkg):
     return dockerfile, values, files
 
 
-def scan_package(report, stage, pkg, pins, online, inherited):
+def scan_package(report, stage, pkg, pins, inherited):
     """Scan one package; returns the ENV it sets for the images built on top of it."""
     dockerfile, values, files = package_files(pkg)
     if dockerfile:
@@ -633,7 +607,6 @@ def scan_package(report, stage, pkg, pins, online, inherited):
                         prev,
                         local,
                         where,
-                        online,
                         later and (later[0], f"{rel}:{later[1]}{note}", later[2]),
                         cache,
                     )
@@ -748,7 +721,7 @@ def compatible(a, b):
 
 
 def print_libs(stages):
-    """Per-stage pip distributions, then the cross-stage analysis."""
+    """Per-stage pip distributions (spec and source line), in build order."""
     print("\n== libs: pip distributions each stage installs or builds (build order)")
     print("   build.sh rows run only on a source build; (any) = no version given")
     empty = []
@@ -764,63 +737,46 @@ def print_libs(stages):
     if empty:
         print("\n  no pip installs: " + ', '.join(empty))
 
+
+def cross_stage(report, stages, pins):
+    """Findings across stages: spec changes, unversioned re-installs, incompatible specs."""
     by_dist = {}
     for i, stage, rows in stages:
         for d, spec, where, tag in rows:
-            if tag != 'req':
+            if tag == 'req':
+                report.add('INFO', stage, f"{d}: {spec}", where)
+            else:
                 by_dist.setdefault(d, []).append((i, stage, spec, where, tag))
-    changes, unversioned, conflicts = [], [], []
     for d, rows in sorted(by_dist.items()):
         versioned = [r for r in rows if r[2]]
         if len({r[2] for r in versioned}) > 1 and len({r[0] for r in versioned}) > 1:
             steps = []
             for i, stage, spec, _, _ in versioned:
-                if f"#{i} {stage} {spec}" not in steps:
-                    steps.append(f"#{i} {stage} {spec}")
-            changes.append(f"{d}: " + ' -> '.join(steps))
+                if f"{spec} ({stage})" not in steps:
+                    steps.append(f"{spec} ({stage})")
+            report.add('INFO', versioned[-1][1], f"{d} spec changes: " + ' -> '.join(steps))
         pinned = next((r for r in rows if re.match(r'(==|~=)', r[2])), None)
         for i, stage, spec, where, tag in rows:
-            if pinned and i > pinned[0] and not spec:
-                unversioned.append(
-                    f"{d}: {pinned[2]} at #{pinned[0]} {pinned[1]}, then (any)"
-                    f"{' [-U]' if tag == '-U' else ''} at #{i} {stage}\n        {where}"
+            # pinned dists are already reported by scan_package
+            if pinned and i > pinned[0] and not spec and d not in pins:
+                report.add(
+                    'WARN',
+                    stage,
+                    f"installs {d} without a version{' (-U)' if tag == '-U' else ''}"
+                    f" after {d}{pinned[2]} at {pinned[1]}",
+                    where,
                 )
         seen = []
-        for i, stage, spec, _, _ in versioned:
+        for i, stage, spec, where, _ in versioned:
             for j, other, prev in seen:
                 if j != i and '$' not in spec + prev and not compatible(spec, prev):
-                    conflicts.append(
-                        f"{d}: {prev} (#{j} {other}) vs {spec} (#{i} {stage})"
+                    report.add(
+                        'WARN',
+                        stage,
+                        f"{d}{spec} is incompatible with {d}{prev} at {other}",
+                        where,
                     )
             seen.append((i, stage, spec))
-    reqs = [
-        f"#{i} {stage} {d}"
-        for i, stage, rows in stages
-        for d, _, _, t in rows
-        if t == 'req'
-    ]
-    print("\n== cross-stage")
-    for title, items in (
-        ("spec changes between stages", changes),
-        (
-            "installed without a version after a versioned install"
-            " (uv keeps the installed version unless -U or another requirement moves it)",
-            unversioned,
-        ),
-        ("INCOMPATIBLE specs", conflicts),
-        (
-            "requirements files read from cloned sources (known only at build time)",
-            reqs,
-        ),
-    ):
-        print(f"\n  {title}: {len(items) or 'none'}")
-        for item in items:
-            print(f"     {item}")
-    print(
-        "\n  build-time only: resolver picks for (any)/range specs and for the"
-        " dependencies of every install, requirements of cloned repos, and which"
-        " branch of 'install.sh || build.sh' runs"
-    )
 
 
 def main():
@@ -828,70 +784,48 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        'packages',
-        nargs='*',
-        help="packages to check (default: PACKAGES in --build-sh)",
-    )
-    parser.add_argument('--build-sh', help="build script whose PACKAGES are checked")
-    parser.add_argument(
-        '--env', default=str(P.ROOT / '.env'), help="pin file sourced by build.sh"
+        'packages', nargs='*', help="packages to check instead of --packages"
     )
     parser.add_argument(
-        '--pins', help="extra pip pins, one 'name==version' per line (numpy, ...)"
+        '--packages',
+        dest='packages_file',
+        default=str(P.HERE / 'packages.txt'),
+        help="package list to check, one per line (default: %(default)s)",
     )
     parser.add_argument(
-        '--online', action='store_true', help="resolve git refs with git ls-remote"
-    )
-    parser.add_argument(
-        '--libs',
-        action='store_true',
-        help="list the pip distributions each stage installs, and cross-stage changes",
-    )
-    parser.add_argument(
-        '-v', '--verbose', action='store_true', help="also list INFO findings"
+        '-v', '--verbose', action='store_true', help="add INFO findings and per-stage libs"
     )
     args = parser.parse_args()
-    if not args.packages and not args.build_sh:
-        parser.error("pass --build-sh or a list of PACKAGES")
 
-    P.load_env(args.env)
-    requested = args.packages or P.read_packages(args.build_sh)
-    pins = P.pip_pins(requested, P.read_pip_pins(args.pins))
+    P.load_env(os.environ.get('ENV_FILE') or P.ROOT / '.env')
+    requested = args.packages or P.read_packages(args.packages_file)
 
     with contextlib.redirect_stdout(io.StringIO()):
-        from jetson_containers.packages import find_package, resolve_dependencies
+        from jetson_containers.packages import resolve_dependencies
 
         try:
             chain = resolve_dependencies(list(requested))
         except KeyError as e:  # a listed package/variant does not exist
             missing = str(e).strip('"\'').split(':', 1)[-1].strip()
             sys.stdout = sys.__stdout__
-            print(f"ERROR: package not found: {missing} (check {args.build_sh})")
+            print(f"ERROR: package not found: {missing} (check {args.packages_file})")
             sys.exit(1)
         except ValueError as e:  # conflicting variants of one package
             sys.stdout = sys.__stdout__
             print(f"ERROR: {e}")
             sys.exit(1)
-        resolved = {name: find_package(name) for name in chain}
+    resolved = P.find_packages(chain)
+    wanted = P.find_packages(requested)
+    pins = P.pip_pins(P.versioned(requested, wanted))
 
     report = Report()
     names = {name: pkg['name'] for name, pkg in resolved.items()}
-    chain_pins = uv_pins(chain, resolved)
-    pins = {**pins, **{d: v for d, (v, _) in chain_pins.items()}}
-    if chain_pins:
-        print(
-            "uv-pin: "
-            + ' '.join(
-                f"{d}=={v} ({src})" for d, (v, src) in sorted(chain_pins.items())
-            )
-        )
     print(f"chain: {len(chain)} stages")
     print('  ' + ' '.join(names[n] for n in chain))
 
     # pins dropped while resolving: the chain keeps the first variant it meets
     for pin in requested:
-        with contextlib.redirect_stdout(io.StringIO()):
-            want = find_package(pin)['name']
+        want = wanted[pin]['name']
         base = pin.split(':')[0]
         got = [names[n] for n in chain if n.split(':')[0] == base]
         if want not in got:
@@ -912,24 +846,24 @@ def main():
             report.add('WARN', pin, f"several variants in the chain: {', '.join(got)}")
 
     inherited = {}  # ENV set by earlier images: name -> (value, stage)
-    stages, by_dir = [], {}  # --libs rows per stage; package dir name -> path
+    stages, by_dir = [], {}  # pip rows per stage; package dir name -> path
     for i, name in enumerate(chain, 1):
         pkg = resolved[name]
-        if args.libs:
-            _, values, files = package_files(pkg)
-            values = {**{k: v for k, (v, _) in inherited.items()}, **values}
-            by_dir[Path(pkg['path']).name] = Path(pkg['path'])
-            ver = re.match(r'\d[\w.]*', pkg['name'].partition(':')[2])
-            own, ver = P.dists_for(pkg['name']), '==' + ver[0] if ver else ''
-            rows = [r for f in files for r in script_libs(f, values, own, ver, by_dir)]
-            first = {}  # the same dist and spec from several lines: keep the first
-            for row in rows:
-                first.setdefault(row[:2], row)
-            stages.append((i, names[name], list(first.values())))
-        envs = scan_package(report, names[name], pkg, pins, args.online, inherited)
+        _, values, files = package_files(pkg)
+        values = {**{k: v for k, (v, _) in inherited.items()}, **values}
+        by_dir[Path(pkg['path']).name] = Path(pkg['path'])
+        ver = P.package_version(pkg)
+        own, ver = P.dists_for(pkg['name']), '==' + ver if ver else ''
+        rows = [r for f in files for r in script_libs(f, values, own, ver, by_dir)]
+        first = {}  # the same dist and spec from several lines: keep the first
+        for row in rows:
+            first.setdefault(row[:2], row)
+        stages.append((i, names[name], list(first.values())))
+        envs = scan_package(report, names[name], pkg, pins, inherited)
         inherited.update({k: (v, names[name]) for k, v in envs.items()})
 
-    if args.libs:
+    cross_stage(report, stages, pins)
+    if args.verbose:
         print_libs(stages)
 
     errors = report.print([names[n] for n in chain] + requested, args.verbose)

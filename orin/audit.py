@@ -4,7 +4,9 @@
 For every stage image of a run (in build order) it collects the installed
 distributions, where each came from (index, local wheel, git commit) and the
 git checkouts under /opt, then reports:
-  - pins (--build-sh PACKAGES + --pins) not met by the final image
+  - pins (--packages list; a bare entry like onnx takes the version of its
+    resolved package config) not met by the final image, and the entries that
+    install no pip distribution (cuda, llvm, ...)
   - stages where a pinned distribution deviated from its pin (intermediate drift)
   - distributions whose version changed more than once along the chain
   - every version change per stage (downgrades marked)
@@ -13,12 +15,12 @@ git checkouts under /opt, then reports:
     uploaded to the devpi index the build used (the image's PIP_INDEX_URL)
 
 Usage:
-  ./audit.py [--log-dir logs/<run>] [--image IMAGE ...] --build-sh BUILD_SH
-                [--pins pins.txt] [--all-changes]
+  ./audit.py [--packages FILE] [--log-dir logs/<run> | --image IMAGE ...] [-v]
 
 Without --image, the stage images are read from the --tag of logs/<run>/build/*.sh
-(default: the newest run). Exits 1 when a pin is not met by the final image
-or a locally built distribution is not on devpi (devpi must be running).
+(default: the newest complete, non --simulate run of this repo's logs/). Exits 1
+when a pin is not met by the final image or a locally built distribution is not
+on devpi (devpi must be running).
 """
 
 import argparse
@@ -33,6 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_list as P  # noqa: E402
+
+P.use_venv()
 
 # runs inside each image: installed dists, their origin, and git checkouts under /opt
 PROBE = r'''
@@ -57,12 +61,7 @@ for g in glob.glob("/opt/*/.git") + glob.glob("/opt/*/*/.git"):
     top = os.path.dirname(g)
     run = lambda *a: subprocess.run(["git", "-C", top, *a], capture_output=True, text=True).stdout.strip()
     repos[top] = [run("rev-parse", "--short=12", "HEAD"), run("describe", "--tags", "--always"), run("remote", "get-url", "origin")]
-try:
-    overrides = open(os.environ.get("UV_OVERRIDE") or "/etc/uv/overrides.txt").read().split()
-except OSError:
-    overrides = []
-print(json.dumps({"dists": dists, "repos": repos, "overrides": overrides,
-                  "index": os.environ.get("PIP_INDEX_URL", "")}))
+print(json.dumps({"dists": dists, "repos": repos, "index": os.environ.get("PIP_INDEX_URL", "")}))
 '''
 
 
@@ -80,10 +79,18 @@ def stage_images(log_dir):
 
 
 def newest_run():
-    runs = sorted(d for d in (P.ROOT / 'logs').glob('*/') if list(d.glob('build/*.sh')))
-    if not runs:
-        sys.exit("no logs/<run>/build/*.sh found; pass --log-dir or --image")
-    return runs[-1]
+    """Newest logs/<run> that built every stage (NNoMM_*.sh up to MM) for real: a
+    failed or interrupted build stops early, and a --simulate run writes the .sh
+    files but no build log, so every stage must also have its .txt log."""
+    for run in sorted((P.ROOT / 'logs').glob('*/'), reverse=True):
+        scripts = list(run.glob('build/*o*_*.sh'))
+        total = {int(re.match(r'\d+o(\d+)_', f.name)[1]) for f in scripts}
+        built = all(f.with_suffix('.txt').is_file() for f in scripts)
+        if scripts and total == {len(scripts)} and built:
+            return run
+        if scripts:
+            print(f"skipping {run.name}: incomplete or --simulate run")
+    sys.exit(f"no complete run in {P.ROOT / 'logs'}; pass --log-dir or --image")
 
 
 def probe(image):
@@ -141,19 +148,26 @@ def main():
     parser.add_argument(
         '--image', action='append', help="audit these images instead (in build order)"
     )
-    parser.add_argument('--build-sh', required=True, help="build script whose PACKAGES hold the pins")
     parser.add_argument(
-        '--pins', help="extra pip pins, one 'name==version' per line (numpy, ...)"
+        '--packages',
+        default=str(P.HERE / 'packages.txt'),
+        help="package list holding the pins (default: %(default)s)",
     )
     parser.add_argument(
-        '--all-changes',
+        '-v',
+        '--verbose',
         action='store_true',
         help="list every version change, not only pinned/flip-flops",
     )
     args = parser.parse_args()
 
-    images = args.image or stage_images(args.log_dir or newest_run())
-    pins = P.pip_pins(P.read_packages(args.build_sh), P.read_pip_pins(args.pins))
+    run = args.log_dir or (None if args.image else newest_run())
+    images = args.image or stage_images(run)
+    if run:
+        print(f"run: {Path(run).resolve()}")
+    entries = P.read_packages(args.packages)
+    named = P.versioned(entries, P.find_packages(entries))
+    pins = P.pip_pins(named)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(probe, images))
@@ -170,11 +184,9 @@ def main():
     )
     if not stages:
         sys.exit(1)
+    if not results[-1][1]:
+        print(f"WARNING: the last stage image {images[-1]} is missing; 'final' below is {final_image}")
 
-    for spec in stages[-1][1].get('overrides', []):  # uv-pin pins of the final image
-        m = re.match(r'([A-Za-z0-9_.\-]+)==(\S+)$', spec)
-        if m:
-            pins.setdefault(P.norm(m.group(1)), m.group(2))
     norm_dists = [
         {P.norm(k): v for k, v in data['dists'].items()} for _, data in stages
     ]
@@ -183,6 +195,11 @@ def main():
     # 1. pins against the final image
     failed = []
     print(f"\n== pins in the final image ({final_name})")
+    nodist = [e for e in entries if not P.dists_for(e)]
+    unpinned = [e for e, n in zip(entries, named) if P.dists_for(e) and not re.search(r':\d', n)]
+    print(f"  no pip dist: {' '.join(nodist) or '-'}")
+    if unpinned:
+        print(f"  no version in the entry or its config (not checked): {' '.join(unpinned)}")
     for dist, pin in sorted(pins.items()):
         got = final.get(dist, [None])[0]
         if got is None and dist.startswith('opencv'):
@@ -238,8 +255,8 @@ def main():
         "\n== version changes per stage"
         + (
             ""
-            if args.all_changes
-            else " (pinned or flip-flop only; --all-changes for all)"
+            if args.verbose
+            else " (pinned or flip-flop only; -v for all)"
         )
     )
     for name, _ in stages[1:]:
@@ -247,7 +264,7 @@ def main():
             (d, o, n)
             for d, h in history.items()
             for s, o, n in h
-            if s == name and o and n and (args.all_changes or d in pins or d in flips)
+            if s == name and o and n and (args.verbose or d in pins or d in flips)
         ]
         for d, o, n in sorted(rows):
             down = '  DOWNGRADE' if vkey(n) < vkey(o) else ''
