@@ -10,6 +10,15 @@
 #   - absent locally       -> downloaded, then verified
 #   - identical            -> skipped
 #   - different            -> downloaded again and replaced
+# Each file gets a sha256sum-format checksum next to it: <wheel>.whl.sha256 and
+# <name>.sha256 for <name>.tar.gz. A final pass checks, for every artifact on
+# the servers, that server sha256 == checksum file == sha256 of the file in
+# dist/, and lists files in dist/ the servers no longer have.
+#
+# A file replaced by a different build with the same name is never lost: the
+# previous file and its checksum move to <kind>/replaced/<YYYYMMDD_HHMMSS>/ (the
+# run's start time) once the new one is verified. replaced/ is never cleaned
+# automatically.
 #
 # Goals:
 # - Resolve the index paths through the repository's own version module, so the
@@ -36,6 +45,8 @@ set -euo pipefail
 # ── Configuration ─────────────────────────────────────────────────────────────
 JC_REPO="${JC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ENV_FILE="${ENV_FILE:-${JC_REPO}/.env}"
+# DIST_DIR given on the command line wins over the one in .env
+DIST_DIR_ARG="${DIST_DIR:-}"
 
 # --- Behavior flags -----------------------------------------------------------
 GET_WHEELS=1
@@ -45,6 +56,10 @@ MATCH=""
 FAILURES=0
 SKIPPED=0
 DOWNLOADED=0
+# dist path -> sha256 published by the server (filled by the listings)
+declare -A SERVER_SHA=()
+# subdirectory of <kind>/replaced/ that receives this run's previous files
+RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
 # ──────────────────────────────────────────────────────────────────────────────
 
 # =============================================================================
@@ -52,7 +67,7 @@ DOWNLOADED=0
 # =============================================================================
 
 usage() {
-    sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,/^# =\{10,\}/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
     exit 0
 }
 
@@ -125,7 +140,7 @@ PY
 }
 
 resolve_paths() {
-    DIST_DIR="${DIST_DIR:-dist}"
+    DIST_DIR="${DIST_DIR_ARG:-${DIST_DIR:-dist}}"
     if [[ "$DIST_DIR" != /* ]]; then
         DIST_DIR="${JC_REPO}/${DIST_DIR}"
     fi
@@ -143,6 +158,29 @@ sha256_of() {
     sha256sum "$1" | cut -d' ' -f1
 }
 
+checksum_path() {
+    # Wheels: <file>.sha256; tarballs keep the server's <name>.sha256 naming.
+    case "$1" in
+        *.tar.gz) echo "${1%.tar.gz}.sha256" ;;
+        *)        echo "${1}.sha256" ;;
+    esac
+}
+
+write_checksum() {
+    # write_checksum DEST SHA256: (re)write DEST's checksum file in sha256sum
+    # format, only when DEST really hashes to SHA256.
+    local dest="$1" sha="$2" sum_file
+    sum_file="$(checksum_path "$dest")"
+
+    (( DRY_RUN )) && return
+    [[ -f "$dest" && "$(sha256_of "$dest")" == "$sha" ]] || return
+    if [[ -f "$sum_file" && "$(cut -d' ' -f1 "$sum_file")" == "$sha" ]]; then
+        return
+    fi
+    [[ -f "$sum_file" ]] && echo "  ~ $(basename "$sum_file"): rewritten (did not match the server)"
+    echo "${sha}  $(basename "$dest")" > "$sum_file"
+}
+
 fetch() {
     # fetch URL DEST SHA256: download to a temp file, verify, then move in place.
     local url="$1" dest="$2" sha="$3"
@@ -153,14 +191,21 @@ fetch() {
         return
     fi
 
+    SERVER_SHA["$dest"]="$sha"
+
     if [[ -f "$dest" && "$(sha256_of "$dest")" == "$sha" ]]; then
         SKIPPED=$((SKIPPED + 1))
         echo "  = $name"
+        write_checksum "$dest" "$sha"
         return
     fi
 
     if (( DRY_RUN )); then
-        echo "  + $name (would download)"
+        if [[ -f "$dest" ]]; then
+            echo "  + $name (would download; previous kept in replaced/${RUN_STAMP}/)"
+        else
+            echo "  + $name (would download)"
+        fi
         DOWNLOADED=$((DOWNLOADED + 1))
         return
     fi
@@ -179,9 +224,72 @@ fetch() {
         return
     fi
 
+    local kept=""
+    if [[ -f "$dest" ]]; then
+        keep_previous "$dest"
+        kept=" (previous kept in replaced/${RUN_STAMP}/)"
+    fi
     mv -f "$tmp" "$dest"
+    write_checksum "$dest" "$sha"
     DOWNLOADED=$((DOWNLOADED + 1))
-    echo "  + $name"
+    echo "  + ${name}${kept}"
+}
+
+keep_previous() {
+    # Move DEST and its checksum to <dir>/replaced/<RUN_STAMP>/; a missing or
+    # stale checksum is recomputed so the kept copy stays verifiable.
+    local dest="$1" sum_file keep_dir
+    sum_file="$(checksum_path "$dest")"
+    keep_dir="$(dirname "$dest")/replaced/${RUN_STAMP}"
+
+    mkdir -p "$keep_dir"
+    mv -f "$dest" "$keep_dir/"
+    echo "$(sha256_of "$keep_dir/$(basename "$dest")")  $(basename "$dest")" \
+        > "$keep_dir/$(basename "$sum_file")"
+    rm -f "$sum_file"
+}
+
+verify_dist() {
+    # Every artifact on the servers: server sha256 == checksum file == file.
+    # Files in dist/ that the servers do not list are reported, not deleted.
+    local dest sha sum_file actual recorded file bad=0 orphans=0
+
+    echo "==> verifying dist/ against the servers"
+    for dest in "${!SERVER_SHA[@]}"; do
+        sha="${SERVER_SHA[$dest]}"
+        sum_file="$(checksum_path "$dest")"
+        if [[ ! -f "$dest" ]]; then
+            (( DRY_RUN )) || { echo "  ! $(basename "$dest"): missing"; bad=$((bad + 1)); }
+            continue
+        fi
+        actual="$(sha256_of "$dest")"
+        recorded="$(cut -d' ' -f1 "$sum_file" 2>/dev/null || true)"
+        if [[ "$actual" != "$sha" ]] && (( DRY_RUN )); then
+            continue  # fetch already reported it as 'would download'
+        elif [[ "$actual" != "$sha" ]]; then
+            echo "  ! $(basename "$dest"): file sha256 $actual != server $sha"
+            bad=$((bad + 1))
+        elif [[ "$recorded" != "$sha" ]]; then
+            if (( DRY_RUN )); then
+                echo "  ~ $(basename "$sum_file"): ${recorded:-missing} (would write $sha)"
+            else
+                echo "  ! $(basename "$sum_file"): ${recorded:-missing} != server $sha"
+                bad=$((bad + 1))
+            fi
+        fi
+    done
+    for file in "$WHEEL_DIR"/*.whl "$TARBALL_DIR"/*.tar.gz; do
+        [[ -f "$file" ]] || continue
+        [[ -n "$MATCH" && "$(basename "$file")" != *"$MATCH"* ]] && continue
+        [[ -n "${SERVER_SHA[$file]+x}" ]] && continue
+        # only report the kinds this run listed (--wheels / --tarballs)
+        if [[ "$file" == *.whl ]] && (( ! GET_WHEELS )); then continue; fi
+        if [[ "$file" == *.tar.gz ]] && (( ! GET_TARBALLS )); then continue; fi
+        echo "  ? $(basename "$file"): in dist/ but not on the server"
+        orphans=$((orphans + 1))
+    done
+    echo "    ${#SERVER_SHA[@]} checked, ${bad} mismatched, ${orphans} not on the server"
+    FAILURES=$((FAILURES + bad))
 }
 
 # =============================================================================
@@ -206,7 +314,8 @@ for project in sorted(get(index).get("projects", [])):
     for version in get(f"{index}/{project}").values():
         for link in version.get("+links", []):
             algo, _, digest = link.get("hash_spec", "").partition("=")
-            if algo == "sha256" and link.get("href"):
+            # files stored under this index (uploads), never mirror links
+            if algo == "sha256" and f"{index}/+f/" in link.get("href", ""):
                 print(link["href"], digest)
 PY
 }
@@ -247,9 +356,6 @@ download_tarballs() {
             continue
         fi
         fetch "${APT_INDEX_URL}/${name}" "${TARBALL_DIR}/${name}" "$sha"
-        if (( ! DRY_RUN )) && [[ -f "${TARBALL_DIR}/${name}" ]]; then
-            echo "${sha}  ${name}" > "${TARBALL_DIR}/${name%.tar.gz}.sha256"
-        fi
     done < <(list_tarballs)
 }
 
@@ -300,6 +406,7 @@ fi
 
 (( GET_WHEELS )) && download_wheels
 (( GET_TARBALLS )) && download_tarballs
+verify_dist
 
 echo
 echo "downloaded: ${DOWNLOADED}  unchanged: ${SKIPPED}  failed: ${FAILURES}$( (( DRY_RUN )) && echo '  (dry run)')"
